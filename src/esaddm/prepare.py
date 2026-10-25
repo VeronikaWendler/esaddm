@@ -43,7 +43,7 @@ def _validate_source(df):
             (es.op1.eq('S') & es.op2.eq('E'))).all():
         raise ValueError('Each ES trial must contain exactly one E and one S option')
     if len(es) and not 0.02 <= es.op1.eq('E').mean() <= 0.98:
-        raise ValueError('ES options appear canonicalized instead of physical left/right')
+        raise ValueError('ES options appear restructured instead of physical left/right')
     if 'chose_right_spatial' in df:
         cho = pd.to_numeric(df.cho, errors='coerce')
         right = pd.to_numeric(df.chose_right_spatial, errors='coerce')

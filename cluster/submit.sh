@@ -9,6 +9,7 @@ if [[ "$action" != 'prep' ]]; then
 fi
 case "$study" in study1|study2|both) ;; *) echo "Invalid study: $study" >&2; exit 2 ;; esac
 mkdir -p "$root/logs/slurm"
+
 # All Slurm output+errors in one file per job
 sbatch --chdir="$root" \
     --output="$root/logs/slurm/prep_${study}_%j.log" \
