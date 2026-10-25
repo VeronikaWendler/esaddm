@@ -1,4 +1,4 @@
-# All private / heavyweight / generated project data
+# data is kept private
 studies/*/data/raw/*
 !studies/*/data/raw/.gitkeep
 studies/*/data/prepared/*

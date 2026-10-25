@@ -6,6 +6,10 @@
 #SBATCH --mail-type=ALL
 
 set -euo pipefail
+
+module purge
+module load bluebear
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 study="${1:?usage: prep.sbatch study1|study2|both}"
 image="${IMAGE:-${HOME}/containers/hddm_latest.sif}"
