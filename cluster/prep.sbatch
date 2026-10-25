@@ -31,9 +31,12 @@ run_study() {
     fi
     echo "${this_study}: running ${action} in the existing HDDM container"
     # Both studies and output folders are in the same repository
+
     apptainer exec --cleanenv --bind "${root}:${root}" --pwd "$root" \
-        --env "PYTHONPATH=${root}/src" "$image" \
-        python -m esaddm.cli "$action" --study "$this_study"
+    "$image" bash -c '
+        export PYTHONPATH="$PWD/src"
+        exec python -m esaddm.cli "$@"
+    ' bash "$action" --study "$this_study"
 }
 
 case "$study" in
