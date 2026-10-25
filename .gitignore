@@ -1,0 +1,22 @@
+# All private / heavyweight / generated project data
+studies/*/data/raw/*
+!studies/*/data/raw/.gitkeep
+studies/*/data/prepared/*
+!studies/*/data/prepared/.gitkeep
+studies/*/results/*
+!studies/*/results/.gitkeep
+logs/slurm/*
+!logs/slurm/.gitkeep
+.venv/
+.vscode/
+__pycache__/
+.pytest_cache/
+*.pyc
+*.egg-info/
+dist/
+build/
+*.sif
+*.hddm
+*.pkl
+*.nc
+.DS_Store

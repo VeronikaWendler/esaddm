@@ -1,0 +1,8 @@
+{
+  "study": "study2",
+  "raw_file": "Study2_Behaviour_with_Gaze_AnalysisReady.csv",
+  "excluded_subjects": [2, 6, 9, 14, 18, 20, 26],
+  "expected_participants": 20,
+  "expected_rows": {"identity_es": 6549, "accuracy_es": 5811, "accuracy_ee": 2363},
+  "min_rt_seconds": 0.250
+}
