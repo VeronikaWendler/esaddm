@@ -32,11 +32,16 @@ run_study() {
     echo "${this_study}: running ${action} in the existing HDDM container"
     # Both studies and output folders are in the same repository
 
-    apptainer exec --cleanenv --bind "${root}:${root}" --pwd "$root" \
-    "$image" bash -c '
-        export PYTHONPATH="$PWD/src"
-        exec python -m esaddm.cli "$@"
-    ' bash "$action" --study "$this_study"
+    apptainer exec --cleanenv \
+        --bind "${root}:${root}" \
+        --pwd "$root" \
+        "$image" \
+        python -c '
+    import sys
+    sys.path.insert(0, sys.argv.pop(1) + "/src")
+    from esaddm.cli import main
+    main()
+    ' "$root" "$action" --study "$this_study"
 }
 
 case "$study" in
