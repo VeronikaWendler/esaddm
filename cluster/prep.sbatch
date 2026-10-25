@@ -36,12 +36,8 @@ run_study() {
         --bind "${root}:${root}" \
         --pwd "$root" \
         "$image" \
-        python -c '
-    import sys
-    sys.path.insert(0, sys.argv.pop(1) + "/src")
-    from esaddm.cli import main
-    main()
-    ' "$root" "$action" --study "$this_study"
+        env PYTHONPATH="$root/src" \
+        python -m esaddm.cli "$action" --study "$this_study"
 }
 
 case "$study" in
