@@ -257,12 +257,12 @@ def run_plotting(study: str, model: str, root: Path = ROOT) -> Path:
     (result_dir / f'{prefix}_ppc_plot_run.json').write_text(
         json.dumps(summary, indent=2) + '\n', encoding='utf-8')
     print(f'PASS PPC PLOTS {study}/{model}: {len(plots)} figures, 3 summary tables; '
-          'no posterior predictive simulations run', flush=True)
+          , flush=True)
     return result_dir
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Generate PPC tables and figures from saved PPC data')
+    parser = argparse.ArgumentParser(description='Generate PPC tables and figures')
     parser.add_argument('--study', choices=['study1', 'study2'], required=True)
     parser.add_argument('--model', choices=[*load_models(), 'all'], required=True)
     args = parser.parse_args(argv)

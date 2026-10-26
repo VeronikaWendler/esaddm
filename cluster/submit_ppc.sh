@@ -2,6 +2,14 @@
 # Examples:
 #   bash cluster/submit_ppc.sh study1 esaddm_z
 #   bash cluster/submit_ppc.sh study1 all
+#
+#   PPC_DRAWS=1000 PPC_BATCH_SIZE=100 PPC_MEM=128G \
+#   bash cluster/submit_ppc.sh study2 all
+#
+#   PPC_DRAWS=1000 PPC_BATCH_SIZE=100 PPC_MEM=128G \
+#   bash cluster/submit_ppc.sh study1 all
+#
+#
 # Generates ONLY saved PPC data. Plot later via submit_ppc_plot.sh.
 #   PPC_DRAWS=500 bash cluster/submit_ppc.sh study2 all
 set -euo pipefail
