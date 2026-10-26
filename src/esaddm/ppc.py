@@ -1,0 +1,628 @@
+"""Lean, trial-aligned posterior predictive checks for the six ESaDDM models.
+
+Each run reads already-fitted HDDM chains; it never fits or modifies models.
+250 replicated full datasets by default (50 from each of five chains).
+
+- ES models: participant-level RT/accuracy by chosen E or S; P(E/S) by
+  predicted RT quintile; P(S) by *observed* S-minus-E dwell-time quintile.
+- EE accuracy model: overall accuracy and RT for correct/error choices.
+- Tie trials are RETAINED in ES identity PPC; ties are excluded ONLY from
+  accuracy calculations because correctness is undefined on a value tie.
+
+PPC simulated rows are joined to their original trials via (sub_id, phase,
+trial), then their appended empirical RT/response are verified. No positional
+trial matching is accepted. This prevents false gaze/choice associations.
+"""
+from __future__ import annotations
+
+import argparse
+from datetime import datetime, timezone
+import gc
+import json
+from pathlib import Path
+import re
+
+import arviz as az
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+from .models import ROOT, check_input, load_models
+
+# Identical E/S palette to the original identity PPC; prediction is darker.
+OBS_E = 'deepskyblue'
+OBS_S = 'darkorchid'
+PPC_E = 'steelblue'
+PPC_S = 'indigo'
+OBS_OTHER = '#B5B5B5'
+PPC_OTHER = '#515151'
+FONT_TITLE = 28
+FONT_PANEL = 22
+FONT_AXIS = 22
+FONT_TICKS = 19
+QUINTILES = (1, 2, 3, 4, 5)
+IDENTITY_MODELS = frozenset({'addm', 'addm_z', 'esaddm', 'esaddm_z'})
+TRIAL_KEYS = ['sub_id', 'phase', 'trial']
+
+
+def model_prefix(model: str, study: str) -> str:
+    return f'{model}_{study}'
+
+
+def split_draws(total: int, chains: int) -> list[int]:
+    if total < chains or chains < 1:
+        raise ValueError('PPC replicates must be >= number of chains (both positive)')
+    quotient, remainder = divmod(total, chains)
+    return [quotient + (i < remainder) for i in range(chains)]
+
+
+def load_fit_metadata(study: str, model: str, chains: int, root: Path = ROOT):
+    spec = load_models(root)[model]
+    directory = root / 'studies' / study / 'results' / 'fits' / model
+    prefix = model_prefix(model, study)
+    manifest = directory / f'{prefix}_run.json'
+    if not manifest.is_file():
+        raise FileNotFoundError(f'Missing full-fit manifest: {manifest}')
+    meta = json.loads(manifest.read_text(encoding='utf-8'))
+    expected = {
+        'study': study, 'model': model, 'formula': spec.drift_formula,
+        'coordinate': spec.coordinate, 'included_ddm_parameters': spec.include,
+        'chains': list(range(1, chains + 1)), 'status': 'completed',
+    }
+    for key, value in expected.items():
+        if meta.get(key) != value:
+            raise ValueError(f'{manifest}: {key} is {meta.get(key)!r}, expected {value!r}')
+    chain_files = [directory / f'{prefix}_chain{i}.hddm' for i in expected['chains']]
+    missing = [str(p) for p in chain_files if not p.is_file()]
+    if missing:
+        raise FileNotFoundError(f'Missing full-fit HDDM models: {missing}')
+    return chain_files, meta
+
+
+def verify_fit_observed(model_data: pd.DataFrame, prepared: pd.DataFrame) -> pd.DataFrame:
+    """Require exact row identities and RT/response agreement with fit inputs."""
+    obs = model_data.copy().reset_index(drop=True)
+    required = {*TRIAL_KEYS, 'subj_idx', 'rt', 'response'}
+    if not required.issubset(obs) or not required.issubset(prepared):
+        raise ValueError(f'Fit/prepared data missing {sorted(required - set(obs))}')
+    if len(obs) != len(prepared):
+        raise ValueError('Saved HDDM dataset and prepared dataset differ in trial count')
+    if obs.duplicated(TRIAL_KEYS).any() or prepared.duplicated(TRIAL_KEYS).any():
+        raise ValueError('Nonunique fitted trial identities')
+    target = prepared[[*TRIAL_KEYS, 'subj_idx', 'rt', 'response']].rename(
+        columns={c: f'__expected_{c}' for c in ('subj_idx', 'rt', 'response')})
+    joined = obs.merge(target, on=TRIAL_KEYS, how='left', validate='one_to_one')
+    if joined['__expected_rt'].isna().any():
+        raise ValueError('Some fitted observations do not match prepared trials')
+    for col in ('subj_idx', 'rt', 'response'):
+        left = pd.to_numeric(joined[col]).abs() if col == 'rt' else pd.to_numeric(joined[col])
+        right = pd.to_numeric(joined[f'__expected_{col}']).abs() if col == 'rt' else pd.to_numeric(joined[f'__expected_{col}'])
+        if not np.allclose(left, right, atol=1e-5, rtol=0):
+            raise ValueError(f'Saved HDDM observations disagree with prepared {col}')
+    return obs
+
+
+def attach_raw_es_metadata(obs: pd.DataFrame, study: str, root: Path = ROOT) -> pd.DataFrame:
+    """Strict, one-to-one AnalysisReady merge; original corrected E/S gaze."""
+    cfg = json.loads((root / 'config' / f'{study}.json').read_text(encoding='utf-8'))
+    path = root / 'studies' / study / 'data' / 'raw' / cfg['raw_file']
+    needed = [*TRIAL_KEYS, 'op1', 'op2', 'cho', 'p1', 'p2',
+              'Dwell_S', 'Dwell_E', 'DwellTimeAdvantage_ES']
+    raw = pd.read_csv(path, usecols=needed, low_memory=False)
+    raw = raw.loc[raw.phase.astype(str).str.strip().eq('ES')].copy()
+    raw['phase'] = raw.phase.astype(str).str.strip()
+    if raw.duplicated(TRIAL_KEYS).any():
+        raise ValueError('AnalysisReady ES trial keys are not unique')
+    orig_n = len(obs)
+    obs = obs.merge(raw, on=TRIAL_KEYS, how='left', validate='one_to_one',
+                    suffixes=('', '_raw'), sort=False)
+    if len(obs) != orig_n or obs[['op1', 'op2']].isna().any().any():
+        raise ValueError('AnalysisReady E/S trial join failed')
+    if not ((obs.op1.eq('E') & obs.op2.eq('S')) |
+            (obs.op1.eq('S') & obs.op2.eq('E'))).all():
+        raise ValueError('ES raw trials do not each contain E and S')
+    for col in ['p1', 'p2', 'Dwell_S', 'Dwell_E', 'DwellTimeAdvantage_ES']:
+        obs[col] = pd.to_numeric(obs[col], errors='raise')
+    if obs[['Dwell_S', 'Dwell_E', 'DwellTimeAdvantage_ES']].isna().any().any():
+        raise ValueError('Fitted ES rows have missing corrected gaze information')
+    if not np.allclose(obs['DwellTimeAdvantage_ES'], obs['Dwell_S']-obs['Dwell_E'],
+                       atol=1e-7, rtol=0):
+        raise ValueError('DTA must equal Dwell_S minus Dwell_E, not spatial DTA')
+    if 'cho_raw' in obs and obs['cho_raw'].notna().all():
+        if not np.allclose(pd.to_numeric(obs.cho), pd.to_numeric(obs.cho_raw)):
+            raise ValueError('Choice in raw and prepared data does not match')
+    high_side = np.where(obs.p1 > obs.p2, 1, np.where(obs.p2 > obs.p1, 2, 0))
+    obs['better_source'] = np.where(high_side == 1, obs.op1,
+                                    np.where(high_side == 2, obs.op2, None))
+    obs['worse_source'] = np.where(obs.better_source.eq('E'), 'S',
+                                   np.where(obs.better_source.eq('S'), 'E', None))
+    obs['is_tie'] = high_side == 0
+    obs['dwell_ms_s_minus_e'] = obs['DwellTimeAdvantage_ES']
+    if 'v_e' in obs and 'v_s' in obs:
+        if not np.array_equal(obs['is_tie'].to_numpy(),
+                              np.isclose(obs.v_e, obs.v_s, atol=1e-10, rtol=0)):
+            raise ValueError('Raw/prepared ES tie status disagrees')
+    return obs
+
+
+def set_observed_outcomes(obs: pd.DataFrame, model: str) -> pd.DataFrame:
+    obs = obs.copy()
+    if model == 'accuracy_ee':
+        obs['choice_group'] = np.where(obs.response.eq(1), 'Correct', 'Error')
+        obs['accuracy_value'] = obs.response.astype(float)
+        return obs
+    if model == 'accuracy_es':
+        obs['choice_group'] = np.where(obs.response.eq(1), obs.better_source,
+                                        obs.worse_source)
+        direct = np.where(pd.to_numeric(obs.cho).eq(1), obs.op1, obs.op2)
+        if not np.array_equal(obs.choice_group.to_numpy(), direct):
+            raise ValueError('Observed accuracy-coded choices disagree with E/S source labels')
+        obs['accuracy_value'] = obs.response.astype(float)
+    else:
+        obs['choice_group'] = np.where(obs.response.eq(1), 'S', 'E')
+        obs['accuracy_value'] = np.where(
+            obs['is_tie'], np.nan,
+            (obs['choice_group'] == obs['better_source']).astype(float))
+        # Identity-coded E/S ties remain in choice and RT PPC, not accuracy.
+    if not obs.choice_group.isin(['E', 'S']).all():
+        raise ValueError('Missing E/S choice group')
+    return obs
+
+
+def rank_quintile(x: pd.Series) -> np.ndarray:
+    """Five equally-sized, ascending RT or DTA bins; tie order is deterministic."""
+    numeric = np.asarray(pd.to_numeric(x, errors='raise'), dtype=float)
+    if len(numeric) < 5 or not np.isfinite(numeric).all():
+        raise ValueError('Cannot rank-bin fewer than five finite observations')
+    order = np.argsort(numeric, kind='stable')
+    groups = np.empty(len(numeric), dtype=np.int8)
+    for i, indices in enumerate(np.array_split(order, 5), start=1):
+        groups[indices] = i
+    return groups
+
+
+def prepare_observed(study: str, model: str, prepared: pd.DataFrame,
+                     saved_data: pd.DataFrame, root: Path = ROOT) -> pd.DataFrame:
+    obs = verify_fit_observed(saved_data, prepared)
+    if model != 'accuracy_ee':
+        obs = attach_raw_es_metadata(obs, study, root)
+    obs = set_observed_outcomes(obs, model)
+    obs['rt_value'] = np.abs(pd.to_numeric(obs.rt, errors='raise'))
+    obs['rt_quintile'] = rank_quintile(obs.rt_value)
+    if model != 'accuracy_ee':
+        obs['dwell_quintile'] = rank_quintile(obs.dwell_ms_s_minus_e)
+    return obs
+
+
+def safe_reset_index(frame: pd.DataFrame) -> pd.DataFrame:
+    frame = frame.copy()
+    names = []
+    for idx, original in enumerate(frame.index.names):
+        name = original if original is not None else f'index_level_{idx}'
+        while name in frame.columns or name in names:
+            name = f'index_{idx}_{name}'
+        names.append(name)
+    frame.index = frame.index.set_names(names)
+    return frame.reset_index()
+
+
+def identify_sample_column(flat: pd.DataFrame) -> str:
+    for col in ('sample', 'draw', 'idx_sample'):
+        if col in flat:
+            return col
+    matches = [c for c in flat if re.match(r'^(?:index_\d+_)?(?:sample|draw)$', str(c))]
+    if len(matches) == 1:
+        return matches[0]
+    raise ValueError(f'Cannot locate HDDM PPC draw identifier; columns={list(flat)}')
+
+
+def attach_predictive_outcomes(flat: pd.DataFrame, obs: pd.DataFrame,
+                               model: str, chain: int) -> pd.DataFrame:
+    """Reattach metadata by verified trial keys; NEVER infer by row position."""
+    sample_col = identify_sample_column(flat)
+    required = {*TRIAL_KEYS, 'subj_idx', 'rt', 'response',
+                'response_sampled', 'rt_sampled', sample_col}
+    if not required.issubset(flat.columns):
+        raise ValueError(f'HDDM append_data PPC missing columns: {sorted(required-set(flat.columns))}')
+    flat = flat.copy()
+    flat['ppc_draw'] = flat[sample_col].astype(str).map(lambda x: f'{chain}:{x}')
+    expected_n = len(obs)
+    sizes = flat.groupby('ppc_draw', sort=False).size()
+    if sizes.empty or not (sizes == expected_n).all():
+        raise ValueError(f'Each PPC draw must contain exactly {expected_n} fitted rows: {sizes.describe()}')
+    if flat.duplicated(['ppc_draw', *TRIAL_KEYS]).any():
+        raise ValueError('Duplicate trial identity within PPC draw')
+    # The sample output already has original observed values from append_data=True.
+    # Check that they match fitted observations after the KEYED join, not position.
+    metadata = obs[[*TRIAL_KEYS, 'subj_idx', 'rt', 'response', 'better_source',
+                    'worse_source', 'is_tie', 'dwell_quintile']].copy() if model != 'accuracy_ee' else obs[
+                    [*TRIAL_KEYS, 'subj_idx', 'rt', 'response']].copy()
+    metadata = metadata.rename(columns={k: f'__original_{k}'
+                                        for k in ['subj_idx', 'rt', 'response']})
+    flat = flat.merge(metadata, on=TRIAL_KEYS, how='left', validate='many_to_one', sort=False)
+    if flat['__original_rt'].isna().any():
+        raise ValueError('PPC trial keys fail to match fitted trial keys')
+    for name in ('subj_idx', 'rt', 'response'):
+        original = np.asarray(pd.to_numeric(flat[f'__original_{name}']), dtype=float)
+        appended = np.asarray(pd.to_numeric(flat[name]), dtype=float)
+        if name == 'rt':
+            appended, original = np.abs(appended), np.abs(original)
+        if not np.allclose(appended, original, rtol=0, atol=1e-5):
+            raise ValueError(f'HDDM PPC appended {name} differs from fitted trial: alignment invalid')
+    resp = pd.to_numeric(flat.response_sampled, errors='raise').to_numpy(dtype=float)
+    if not np.isfinite(resp).all() or not np.isin(resp, [0, 1]).all():
+        raise ValueError('HDDM simulated boundary responses must be 0/1')
+    rt = np.abs(pd.to_numeric(flat.rt_sampled, errors='raise').to_numpy(dtype=float))
+    if not np.isfinite(rt).all() or (rt <= 0).any():
+        raise ValueError('PPC returned invalid simulated RTs')
+    flat['rt_value'] = rt
+    flat['rt_quintile'] = -1
+    for _, indices in flat.groupby('ppc_draw', sort=False).groups.items():
+        flat.loc[indices, 'rt_quintile'] = rank_quintile(flat.loc[indices, 'rt_value'])
+    if model == 'accuracy_ee':
+        flat['choice_group'] = np.where(resp == 1, 'Correct', 'Error')
+        flat['accuracy_value'] = resp
+    elif model == 'accuracy_es':
+        flat['choice_group'] = np.where(resp == 1, flat.better_source, flat.worse_source)
+        flat['accuracy_value'] = resp
+    else:
+        flat['choice_group'] = np.where(resp == 1, 'S', 'E')
+        flat['accuracy_value'] = np.where(
+            flat.is_tie, np.nan,
+            (flat.choice_group == flat.better_source).astype(float))
+    return flat
+
+
+def subjectwise_mean(frame: pd.DataFrame, field: str, group: str | None = None) -> pd.DataFrame:
+    keys = ['subj_idx'] + ([group] if group else [])
+    return frame.groupby(keys, observed=True, sort=False)[field].mean().reset_index(name='value')
+
+
+def bin_means(frame: pd.DataFrame, bin_name: str, field: str) -> pd.DataFrame:
+    sub = frame.groupby(['subj_idx', bin_name], sort=False, observed=True)[field].mean().reset_index()
+    return sub.groupby(bin_name, sort=True, observed=True)[field].mean().reindex(QUINTILES).reset_index(name='value')
+
+
+def draw_metrics(frame: pd.DataFrame, study: str, model: str, draw: str) -> tuple[list[dict], list[dict]]:
+    """Compact metrics for one simulated full dataset, with equal subject weighting."""
+    out, subjects = [], []
+    def push(metric: str, group: str, value: float, quintile=None):
+        if not np.isfinite(value):
+            raise ValueError(f'No finite estimate of {metric} {group} for draw {draw}')
+        out.append(dict(study=study, model=model, draw=draw,
+                        metric=metric, group=group, quintile=quintile, value=float(value)))
+
+    def save_subjects(metric: str, group_col: str | None, valid=None):
+        data = frame if valid is None else frame.loc[valid]
+        sub = subjectwise_mean(data, metric, group_col)
+        metric_label = {'rt_value': 'mean_rt', 'accuracy_value': 'accuracy'}[metric]
+        for row in sub.itertuples(index=False):
+            if group_col is None:
+                subject, value = row
+                group = 'Overall'
+            else:
+                subject, group, value = row
+            if pd.notna(value):
+                subjects.append(dict(draw=draw, subj_idx=int(subject),
+                                     metric=metric_label, group=str(group), value=float(value)))
+        if group_col is None:
+            push(metric_label, 'Overall', sub.value.mean())
+        else:
+            for group, group_rows in sub.groupby(group_col, observed=True):
+                push(metric_label, str(group), group_rows.value.mean())
+
+    save_subjects('rt_value', None)
+    save_subjects('accuracy_value', None)
+    if model == 'accuracy_ee':
+        save_subjects('rt_value', 'choice_group')
+    else:
+        save_subjects('rt_value', 'choice_group')
+        save_subjects('accuracy_value', 'choice_group')
+    if model in IDENTITY_MODELS:
+        push('p_choose_s', 'S', subjectwise_mean(
+            frame.assign(__chose_s=frame.choice_group.eq('S').astype(float)), '__chose_s').value.mean())
+        data = frame.assign(__chose_s=frame.choice_group.eq('S').astype(float))
+        rt_bins = bin_means(data, 'rt_quintile', '__chose_s')
+        for b in QUINTILES:
+            push('p_choose_s_by_rt_quintile', 'S',
+                 rt_bins.loc[rt_bins.rt_quintile.eq(b), 'value'].iloc[0], b)
+        dwell = bin_means(data, 'dwell_quintile', '__chose_s')
+        for b in QUINTILES:
+            push('p_choose_s_by_dwell_quintile', 'S',
+                 dwell.loc[dwell.dwell_quintile.eq(b), 'value'].iloc[0], b)
+        push('p_choose_s_rt_quintile_slope', 'S',
+             np.polyfit(np.array(QUINTILES), rt_bins.value.to_numpy(float), 1)[0])
+        push('p_choose_s_dwell_quintile_slope', 'S',
+             np.polyfit(np.array(QUINTILES), dwell.value.to_numpy(float), 1)[0])
+    return out, subjects
+
+
+def observed_metrics(obs: pd.DataFrame, study: str, model: str):
+    return draw_metrics(obs, study, model, 'observed')
+
+
+def summarise_metrics(obs_rows: pd.DataFrame, sim_rows: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    keys = ['metric', 'group', 'quintile']
+    obs = obs_rows.copy()
+    sim = sim_rows.copy()
+    obs['quintile'] = pd.to_numeric(obs['quintile']).fillna(0).astype(int)
+    sim['quintile'] = pd.to_numeric(sim['quintile']).fillna(0).astype(int)
+    g = sim.groupby(keys, dropna=False, sort=False)['value']
+    pred = g.agg(ppc_mean='mean', ppc_sd='std', ppc_median='median', n_ppc='size').reset_index()
+    pi = g.quantile([.025, .975]).unstack().rename(columns={.025:'ppc_pi95_low', .975:'ppc_pi95_high'}).reset_index()
+    pred = pred.merge(pi, on=keys, validate='one_to_one')
+    joined = obs[keys + ['value']].rename(columns={'value':'empirical'}).merge(
+        pred, on=keys, how='outer', validate='one_to_one')
+    if joined.isna().any().any():
+        raise ValueError('Metrics missing empirical values or predictive draws')
+    joined['ppc_minus_empirical'] = joined.ppc_mean-joined.empirical
+    joined['absolute_error'] = joined.ppc_minus_empirical.abs()
+    joined['empirical_in_ppc_95'] = joined.empirical.between(joined.ppc_pi95_low, joined.ppc_pi95_high)
+    core = joined[joined.quintile.eq(0)].drop(columns='quintile').reset_index(drop=True)
+    curves = joined[joined.quintile.ne(0)].reset_index(drop=True)
+    return core, curves
+
+
+def subject_boxplot_data(obs_subjects: pd.DataFrame, sim_subjects: pd.DataFrame,
+                         model: str, study: str) -> pd.DataFrame:
+    keys = ['subj_idx','metric','group']
+    obs = obs_subjects[keys + ['value']].rename(columns={'value':'empirical_value'})
+    sim_group = sim_subjects.groupby(keys)['value']
+    sim = sim_group.agg(ppc_subject_mean='mean', ppc_subject_sd='std', n_ppc='size').reset_index()
+    pi = sim_group.quantile([.025, .975]).unstack().rename(
+        columns={.025: 'ppc_subject_pi95_low', .975: 'ppc_subject_pi95_high'}).reset_index()
+    sim = sim.merge(pi, on=keys, validate='one_to_one')
+    out = obs.merge(sim, on=keys, how='left', validate='one_to_one')
+    if out[['empirical_value','ppc_subject_mean']].isna().any().any():
+        raise ValueError('A subject has no posterior-predictive summary for a plotted outcome')
+    out.insert(0,'study',study)
+    out.insert(1,'model',model)
+    return out
+
+
+def style_plot(ax):
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['left'].set_linewidth(1.4)
+    ax.spines['bottom'].set_linewidth(1.4)
+    ax.tick_params(labelsize=FONT_TICKS, width=1.2)
+    ax.grid(False)
+
+
+def save_plot(fig, output: Path):
+    output.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output.with_suffix('.png'), dpi=300, bbox_inches='tight', facecolor='white')
+    fig.savefig(output.with_suffix('.pdf'), bbox_inches='tight', facecolor='white')
+    plt.close(fig)
+
+
+def plot_boxplots(subject_data: pd.DataFrame, study: str, model: str, output: Path,
+                  metric: str):
+    data = subject_data.loc[subject_data.metric.eq(metric)].copy()
+    if model == 'accuracy_ee':
+        groups = ['Overall'] if metric == 'accuracy' else ['Correct', 'Error']
+    else:
+        groups = ['E', 'S']
+    fig, ax = plt.subplots(figsize=(12.5, 8.1))
+    rng = np.random.default_rng(20260919)
+    if groups == ['E', 'S']:
+        # Gray paired lines, as in the original behavioural talk plots.
+        left = data.loc[data.group.eq('E')].set_index('subj_idx')
+        right = data.loc[data.group.eq('S')].set_index('subj_idx')
+        for sid in left.index.intersection(right.index):
+            ax.plot([-.18, .82],
+                    [left.at[sid, 'empirical_value'], right.at[sid, 'empirical_value']],
+                    color='#999999', alpha=.25, linewidth=.9, zorder=0)
+    for i, group in enumerate(groups):
+        sub = data.loc[data.group.eq(group)].sort_values('subj_idx')
+        if sub.empty:
+            raise ValueError(f'Missing {metric} group {group}')
+        emp_color = {'E':OBS_E, 'S':OBS_S}.get(group, OBS_OTHER)
+        pred_color = {'E':PPC_E, 'S':PPC_S}.get(group, PPC_OTHER)
+        for offset, name, color in [(-.18, 'empirical_value', emp_color),
+                                    (.18, 'ppc_subject_mean', pred_color)]:
+            x = i + offset
+            bp = ax.boxplot(sub[name].to_numpy(), positions=[x], widths=.27,
+                            patch_artist=True, showfliers=False,
+                            medianprops={'color':'#252525','linewidth':2.4},
+                            whiskerprops={'color':'#444444','linewidth':1.2},
+                            capprops={'color':'#444444','linewidth':1.2})
+            bp['boxes'][0].set_facecolor(color)
+            bp['boxes'][0].set_alpha(.78)
+            bp['boxes'][0].set_edgecolor('#282828')
+            scatterx = x + rng.uniform(-.052,.052, size=len(sub))
+            ax.scatter(scatterx, sub[name], color='#333333', alpha=.50, s=28, zorder=4)
+        # Keep subject identities explicit for the empirical E/S contrast
+    ax.set_xticks(range(len(groups)))
+    ax.set_xticklabels(groups, fontsize=FONT_AXIS)
+    ax.set_ylabel('Mean RT (seconds)' if metric == 'mean_rt' else 'Mean accuracy (0–1)',
+                  fontsize=FONT_AXIS)
+    if metric == 'accuracy':
+        ax.set_ylim(0, 1.05)
+    ax.set_title(('Mean RT' if metric == 'mean_rt' else 'Mean accuracy') +
+                 f' — {model} ({study})', fontsize=FONT_TITLE, pad=18)
+    import matplotlib.patches as mpatches
+    if model == 'accuracy_ee':
+        legend_items = [mpatches.Patch(facecolor=OBS_OTHER, label='Empirical'),
+                        mpatches.Patch(facecolor=PPC_OTHER, label='PPC')]
+    else:
+        legend_items = [mpatches.Patch(facecolor=OBS_E, label='Empirical E'),
+                        mpatches.Patch(facecolor=PPC_E, label='PPC E'),
+                        mpatches.Patch(facecolor=OBS_S, label='Empirical S'),
+                        mpatches.Patch(facecolor=PPC_S, label='PPC S')]
+    ax.legend(handles=legend_items, fontsize=15, frameon=False,
+              ncol=2, loc='best')
+    style_plot(ax)
+    fig.tight_layout()
+    save_plot(fig, output)
+
+
+def _curve_slice(curves, metric):
+    part = curves.loc[curves.metric.eq(metric)].sort_values('quintile')
+    if len(part)!=5 or not np.array_equal(part.quintile.to_numpy(), np.array(QUINTILES)):
+        raise ValueError(f'Incomplete quintile PPC curve for {metric}')
+    return part
+
+
+def plot_choice_rt(curves: pd.DataFrame, study: str, model: str, output: Path):
+    rows = _curve_slice(curves, 'p_choose_s_by_rt_quintile')
+    x = np.asarray(QUINTILES, dtype=float)
+    fig, ax = plt.subplots(figsize=(12.5, 8.0))
+    for choice, shift, obs_color, pred_color in (
+        ('E', -.12, OBS_E, PPC_E), ('S', +.12, OBS_S, PPC_S)
+    ):
+        empirical = rows.empirical.to_numpy(float) if choice == 'S' else 1-rows.empirical.to_numpy(float)
+        ppc = rows.ppc_mean.to_numpy(float) if choice == 'S' else 1-rows.ppc_mean.to_numpy(float)
+        low = rows.ppc_pi95_low.to_numpy(float) if choice == 'S' else 1-rows.ppc_pi95_high.to_numpy(float)
+        high = rows.ppc_pi95_high.to_numpy(float) if choice == 'S' else 1-rows.ppc_pi95_low.to_numpy(float)
+        ax.bar(x + shift, empirical, width=.23, alpha=.76, color=obs_color,
+               edgecolor='#222222', linewidth=1.0, label=f'Empirical {choice}', zorder=1)
+        ax.plot(x+shift, ppc, color=pred_color, marker='o', linewidth=3.5,
+                markersize=10, label=f'PPC {choice}', zorder=4)
+        ax.errorbar(x+shift, ppc, yerr=[ppc-low, high-ppc], fmt='none',
+                    ecolor=pred_color, elinewidth=2.2, capsize=5, zorder=3)
+    ax.set_xticks(x)
+    ax.set_xlabel('RT quintile (fastest → slowest)', fontsize=FONT_AXIS)
+    ax.set_ylabel('Choice probability', fontsize=FONT_AXIS)
+    ax.set_ylim(0, 1.0)
+    ax.set_title(f'Choice by RT quintile — {model} ({study})', fontsize=FONT_TITLE, pad=18)
+    ax.legend(frameon=False, fontsize=15, ncol=2)
+    style_plot(ax)
+    fig.tight_layout()
+    save_plot(fig, output)
+
+
+def plot_dwell(curves: pd.DataFrame, study: str, model: str, output: Path):
+    rows = _curve_slice(curves, 'p_choose_s_by_dwell_quintile')
+    x = np.asarray(QUINTILES, dtype=float)
+    fig, ax = plt.subplots(figsize=(12.5, 8.0))
+    ax.bar(x, rows.empirical.to_numpy(float), width=.72, facecolor=OBS_S, alpha=.76,
+           edgecolor='#222222', linewidth=1.0, label='Empirical P(S)', zorder=1)
+    ax.plot(x, rows.ppc_mean.to_numpy(float), color=PPC_S, marker='o', linewidth=3.4,
+            markersize=10, label='PPC P(S)', zorder=4)
+    pred = rows.ppc_mean.to_numpy(float)
+    ax.errorbar(x, pred, yerr=[pred - rows.ppc_pi95_low.to_numpy(float),
+                              rows.ppc_pi95_high.to_numpy(float) - pred],
+                fmt='none', ecolor=PPC_S, elinewidth=2.1, capsize=5, zorder=3)
+    ax.set_xticks(x)
+    # Rank quintiles do not guarantee that the middle bin is truly zero.
+    ax.set_xticklabels(['Q1', 'Q2', 'Q3', 'Q4', 'Q5'], fontsize=FONT_TICKS)
+    ax.set_xlabel('Dwell-time advantage quintile (S − E, ms)', fontsize=FONT_AXIS)
+    ax.set_ylabel('P(choose S)', fontsize=FONT_AXIS)
+    ax.set_ylim(0, 1)
+    ax.set_title(f'Choice by dwell-time advantage — {model} ({study})',
+                 fontsize=FONT_TITLE, pad=18)
+    ax.legend(frameon=False, fontsize=17)
+    style_plot(ax)
+    fig.tight_layout()
+    save_plot(fig, output)
+
+
+def run_ppc(study: str, model: str, *, chains: int = 5, ppc_draws: int = 250,
+            seed: int = 20260919, root: Path = ROOT) -> Path:
+    import hddm  # Deferred: unit tests and CLI validation do not require HDDM.
+
+    spec = load_models(root)[model]
+    files, fit_meta = load_fit_metadata(study, model, chains, root)
+    prepared, _ = check_input(study, spec, root)
+    prefix = model_prefix(model, study)
+    output = root / 'studies' / study / 'results' / 'ppc' / model
+    if output.exists() and any(output.iterdir()):
+        raise FileExistsError(f'PPC output already exists; archive it before rerunning: {output}')
+    output.mkdir(parents=True, exist_ok=True)
+    manifest_path = output / f'{prefix}_ppc_run.json'
+    allocated = split_draws(ppc_draws, chains)
+    rng = np.random.default_rng(seed)
+    # Set RNG just before each post_pred_gen call: HDDM uses NumPy global random state.
+    details = {'study':study, 'model':model, 'fit_manifest':str(files[0].parent / f'{prefix}_run.json'),
+               'status':'running', 'chains':chains, 'ppc_draws_requested':ppc_draws,
+               'draws_per_chain':allocated, 'seed':seed, 'started_utc':datetime.now(timezone.utc).isoformat(),
+               'ppc_method':'HDDM post_pred_gen, append_data=True',
+               'rt_quintile':'independent rank quintiles in each predictive dataset',
+               'dwell_quintile':'empirical corrected Dwell_S - Dwell_E rank quintile, fixed across replicates',
+               'group_average':'equal weighting of participant-level means',
+               'tie_handling':'identity ES ties retained except undefined accuracy',
+               'boxplot_ppc':'distribution of subject-level predictive means across posterior replicates'}
+    manifest_path.write_text(json.dumps(details,indent=2)+'\n',encoding='utf-8')
+    observed = None
+    observed_metrics_rows = None
+    observed_subjects = None
+    draw_rows, subject_rows = [], []
+    for ci, (path, count) in enumerate(zip(files, allocated), start=1):
+        print(f'LOADING {model}/{study} chain {ci}/{chains}: {path}', flush=True)
+        hddm_model = hddm.load(str(path))
+        if observed is None:
+            observed = prepare_observed(study, model, prepared, hddm_model.data, root)
+            observed_metrics_rows, observed_subjects = observed_metrics(observed, study, model)
+        else:
+            # Compare every chain's fitted data with the same prepared input.
+            verify_fit_observed(hddm_model.data, prepared)
+        np.random.seed(int(rng.integers(1, 2**31 - 1)))
+        print(f'PREDICT {model}/{study} chain {ci}: {count} full trial datasets', flush=True)
+        raw_pred = hddm.utils.post_pred_gen(hddm_model, samples=count, append_data=True)
+        flat = safe_reset_index(raw_pred)
+        del raw_pred
+        predicted = attach_predictive_outcomes(flat, observed, model, ci)
+        del flat
+        for draw, block in predicted.groupby('ppc_draw', sort=False):
+            rows, subjects = draw_metrics(block, study, model, draw)
+            draw_rows.extend(rows)
+            subject_rows.extend(subjects)
+        print(f'PASS chain {ci}: {predicted.ppc_draw.nunique()} aligned replicates', flush=True)
+        del predicted, hddm_model
+        gc.collect()
+
+    sim_metrics = pd.DataFrame(draw_rows)
+    sim_subjects = pd.DataFrame(subject_rows)
+    observed_metrics_df = pd.DataFrame(observed_metrics_rows)
+    observed_subjects_df = pd.DataFrame(observed_subjects)
+    n_generated = sim_metrics['draw'].nunique()
+    if n_generated != ppc_draws:
+        raise ValueError(f'Only {n_generated} draws produced; requested {ppc_draws}')
+    core, curves = summarise_metrics(observed_metrics_df, sim_metrics)
+    subject_boxes = subject_boxplot_data(observed_subjects_df, sim_subjects, model, study)
+    core.insert(0,'study',study)
+    core.insert(1,'model',model)
+    curves.insert(0,'study',study)
+    curves.insert(1,'model',model)
+    output.mkdir(parents=True, exist_ok=True)
+    core.to_csv(output / f'{prefix}_ppc_core_summary.csv',index=False,float_format='%.7f')
+    curves.to_csv(output / f'{prefix}_ppc_quintile_curves.csv',index=False,float_format='%.7f')
+    subject_boxes.to_csv(output / f'{prefix}_ppc_subject_boxplot_values.csv',index=False,float_format='%.7f')
+    sim_metrics.to_csv(output / f'{prefix}_ppc_draw_metrics.csv',index=False,float_format='%.7f')
+
+    fig_dir = output / 'plots'
+    plot_boxplots(subject_boxes,study,model,fig_dir / f'{prefix}_ppc_mean_rt', 'mean_rt')
+    plot_boxplots(subject_boxes,study,model,fig_dir / f'{prefix}_ppc_mean_accuracy', 'accuracy')
+    if model in IDENTITY_MODELS:
+        plot_choice_rt(curves,study,model,fig_dir / f'{prefix}_ppc_choice_rt_quintile')
+        plot_dwell(curves,study,model,fig_dir / f'{prefix}_ppc_dwell_quintile')
+    details['ppc_draws_generated']=int(n_generated)
+    details['rows_in_fitted_data']=int(len(observed))
+    details['participants']=int(observed.subj_idx.nunique())
+    details['plots']=['mean_rt','mean_accuracy'] + (
+        ['choice_rt_quintile','dwell_quintile'] if model in IDENTITY_MODELS else [])
+    details['status']='completed'
+    details['finished_utc']=datetime.now(timezone.utc).isoformat()
+    manifest_path.write_text(json.dumps(details,indent=2)+'\n',encoding='utf-8')
+    print(f'PASS PPC {study}/{model}: {n_generated} full datasets, {len(details["plots"])} plots', flush=True)
+    return output
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description='Lean full-model posterior predictive checks')
+    parser.add_argument('--study', choices=['study1','study2'], required=True)
+    parser.add_argument('--model', choices=[*load_models(), 'all'], required=True)
+    parser.add_argument('--chains',type=int,default=5)
+    parser.add_argument('--draws',type=int,default=250,
+                        help='Number of full replicated trial datasets pooled across chains')
+    parser.add_argument('--seed',type=int,default=20260919)
+    args=parser.parse_args(argv)
+    models=list(load_models()) if args.model=='all' else [args.model]
+    for model in models:
+        run_ppc(args.study,model,chains=args.chains,ppc_draws=args.draws,seed=args.seed)
+
+if __name__ == '__main__':
+    main()
