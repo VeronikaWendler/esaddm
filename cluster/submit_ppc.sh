@@ -2,9 +2,7 @@
 # Examples:
 #   bash cluster/submit_ppc.sh study1 esaddm_z
 #   bash cluster/submit_ppc.sh study1 all
-#   PPC_DRAWS=500 bash cluster/submit_ppc.sh study2 all  -> change draws here if you like (we use 500 simialr to the official hddm guidelines)
-
-
+#   PPC_DRAWS=500 bash cluster/submit_ppc.sh study2 all
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 study="${1:-}"
@@ -22,8 +20,8 @@ for st in "${studies[@]}"; do
   for md in "${models[@]}"; do
     echo "Submitting PPC $st/$md" >&2
     sbatch --chdir="$root" --job-name="ppc_${st}_${md}" \
-      --time="${PPC_WALLTIME:-24:00:00}" --mem="${PPC_MEM:-244G}" \
-      --cpus-per-task=5 \
+      --time="${PPC_WALLTIME:-24:00:00}" --mem="${PPC_MEM:-64G}" \
+      --cpus-per-task=1 \
       --output="$root/logs/slurm/ppc_${st}_${md}_%j.out" \
       --error="$root/logs/slurm/ppc_${st}_${md}_%j.err" \
       "$root/cluster/ppc.sbatch" "$st" "$md"

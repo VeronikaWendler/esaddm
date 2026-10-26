@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=esaddm_ppc
 #SBATCH --mail-type=ALL
-
 set -euo pipefail
 module purge
 module load bluebear
@@ -23,5 +22,5 @@ apptainer exec --cleanenv --bind "$root:$root" --pwd "$root" \
   PYTHONUNBUFFERED=1 MPLBACKEND=Agg \
   MPLCONFIGDIR="$cache_root/esaddm_mpl_${SLURM_JOB_ID:-local}" \
   python -m esaddm.ppc --study "$study" --model "$model" \
-    --chains "${CHAINS:-5}" --draws "${PPC_DRAWS:-500}" \
+    --chains "${CHAINS:-5}" --draws "${PPC_DRAWS:-500}" --batch-size "${PPC_BATCH_SIZE:-20}" \
     --seed "${PPC_SEED:-20260919}"

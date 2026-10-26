@@ -11,7 +11,7 @@ rounding steps; changing them changes the drift regressors.
 After three-decimal probability rounding, equal-value trials are **removed**.
 RT must be **strictly greater than 0.250 seconds**.
 
-Let `g_high`, `g_low` be dwell fractions for higher-/lower-valued options:
+`g_high`, `g_low` are dwell fractions for higher-/lower-valued options:
 
 - `attention_w = round(g_high * v_high - g_low * v_low, 3)`
 - `inattention_w = round(g_low * v_high - g_high * v_low, 3)`

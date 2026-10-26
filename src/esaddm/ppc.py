@@ -1,7 +1,8 @@
 """Lean, trial-aligned posterior predictive checks for the six ESaDDM models.
 
 Each run reads already-fitted HDDM chains; it never fits or modifies models.
-250 replicated full datasets by default (50 from each of five chains).
+500 replicated full datasets by default (100 from each of five chains),
+generated in small batches to limit peak memory use.
 
 - ES models: participant-level RT/accuracy by chosen E or S; P(E/S) by
   predicted RT quintile; P(S) by *observed* S-minus-E dwell-time quintile.
@@ -56,6 +57,13 @@ def split_draws(total: int, chains: int) -> list[int]:
         raise ValueError('PPC replicates must be >= number of chains (both positive)')
     quotient, remainder = divmod(total, chains)
     return [quotient + (i < remainder) for i in range(chains)]
+
+
+def split_batches(total: int, batch_size: int) -> list[int]:
+    """Partition PPC replications without holding a full chain in memory."""
+    if total < 1 or batch_size < 1:
+        raise ValueError('PPC draw and batch counts must be positive')
+    return [min(batch_size, total - start) for start in range(0, total, batch_size)]
 
 
 def load_fit_metadata(study: str, model: str, chains: int, root: Path = ROOT):
@@ -208,6 +216,82 @@ def safe_reset_index(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.reset_index()
 
 
+def align_predictions_by_observed_node(raw_pred: pd.DataFrame, hddm_model) -> pd.DataFrame:
+    """Align regression PPC by the observed wfpt node and within-node row index.
+
+    Kabuki appends empirical columns by DataFrame join when append_data=True.
+    For regression simulations this can duplicate or misattach trial identifiers.
+    Instead use the observed node's indexed fit rows and the third PPC index.
+    Abort if their relationship is not unambiguous.
+    """
+    if not isinstance(raw_pred.index, pd.MultiIndex) or raw_pred.index.nlevels != 3:
+        raise ValueError('Expected HDDM PPC index (node, sample, row)')
+
+    # HDDMRegressor's observed wfpt node contains the indexed fitted RTs.
+    # Retrieve corresponding metadata by index label, NOT via Kabuki's
+    # append_data join, which may be misaligned with regression simulations.
+    fields = [*TRIAL_KEYS, 'subj_idx', 'rt', 'response']
+    model_data = hddm_model.data
+    if not model_data.index.is_unique:
+        raise ValueError('Fitted HDDM dataframe index is nonunique')
+    node_tables = {}
+    for name, observed in hddm_model.iter_observeds():
+        node_index = observed['node'].value.index
+        if not node_index.is_unique:
+            raise ValueError(f'HDDM node {name} has a nonunique observation index')
+        table = model_data.loc[node_index, fields].copy()
+        if len(table) != len(node_index) or not table.index.equals(node_index):
+            raise ValueError(f'HDDM node {name} index does not align with saved model data')
+        node_tables[str(name)] = table
+
+    if not node_tables:
+        raise ValueError('HDDM has no observed likelihood nodes')
+    stacked = pd.concat(node_tables.values(), ignore_index=True)
+    if len(stacked) != len(model_data) or stacked.duplicated(TRIAL_KEYS).any():
+        raise ValueError('HDDM likelihood nodes do not partition fitted trials uniquely')
+
+    flat = safe_reset_index(raw_pred)
+    node_col, sample_col, row_col = list(flat.columns[:3])
+    if 'rt' not in flat or 'response' not in flat:
+        raise ValueError('Posterior predictive sample lacks simulated RT/response')
+    if set(flat[node_col].astype(str)) != set(node_tables):
+        raise ValueError('PPC node names do not agree with fitted observed nodes')
+
+    parts = []
+    for node_name, rows in flat.groupby(node_col, sort=False):
+        table = node_tables[str(node_name)]
+        row_ids = pd.Index(rows[row_col].unique())
+        n = len(table)
+        if len(row_ids) != n or rows.groupby(sample_col).size().ne(n).any():
+            raise ValueError(f'PPC node {node_name} does not contain exactly {n} observations per draw')
+        if not rows.duplicated([sample_col, row_col]).sum() == 0:
+            raise ValueError(f'PPC node {node_name} generated repeated row positions in a draw')
+
+        # Some HDDM simulators use original row labels, others reset each
+        # observed node to positions 0..n-1. Both mappings are checked.
+        if row_ids.isin(table.index).all() and len(row_ids) == len(table.index):
+            mapped = table.loc[rows[row_col].to_numpy()].reset_index(drop=True)
+        else:
+            positions = pd.to_numeric(rows[row_col], errors='coerce').to_numpy()
+            if (not np.isfinite(positions).all()
+                    or not np.equal(positions, np.floor(positions)).all()
+                    or not np.isin(positions, np.arange(n)).all()):
+                raise ValueError(f'Unrecognised PPC row-index convention for node {node_name}')
+            mapped = table.iloc[positions.astype(int)].reset_index(drop=True)
+
+        part = rows[[node_col, sample_col]].reset_index(drop=True).copy()
+        part['rt_sampled'] = rows['rt'].to_numpy()
+        part['response_sampled'] = rows['response'].to_numpy()
+        for field in fields:
+            part[field] = mapped[field].to_numpy()
+        parts.append(part)
+
+    result = pd.concat(parts, ignore_index=True)
+    if result.duplicated([sample_col, *TRIAL_KEYS]).any():
+        raise ValueError('PPC node-aligned trial identities still duplicate; refusing to misassign gaze')
+    return result.rename(columns={sample_col: 'sample'})
+
+
 def identify_sample_column(flat: pd.DataFrame) -> str:
     for col in ('sample', 'draw', 'idx_sample'):
         if col in flat:
@@ -234,8 +318,8 @@ def attach_predictive_outcomes(flat: pd.DataFrame, obs: pd.DataFrame,
         raise ValueError(f'Each PPC draw must contain exactly {expected_n} fitted rows: {sizes.describe()}')
     if flat.duplicated(['ppc_draw', *TRIAL_KEYS]).any():
         raise ValueError('Duplicate trial identity within PPC draw')
-    # The sample output already has original observed values from append_data=True.
-    # Check that they match fitted observations after the KEYED join, not position.
+    # Verify the empirical trial identity against prepared data after reconstruction
+    # from the observed HDDM nodes, never from Kabuki appended metadata.
     metadata = obs[[*TRIAL_KEYS, 'subj_idx', 'rt', 'response', 'better_source',
                     'worse_source', 'is_tie', 'dwell_quintile']].copy() if model != 'accuracy_ee' else obs[
                     [*TRIAL_KEYS, 'subj_idx', 'rt', 'response']].copy()
@@ -520,8 +604,8 @@ def plot_dwell(curves: pd.DataFrame, study: str, model: str, output: Path):
     save_plot(fig, output)
 
 
-def run_ppc(study: str, model: str, *, chains: int = 5, ppc_draws: int = 250,
-            seed: int = 20260919, root: Path = ROOT) -> Path:
+def run_ppc(study: str, model: str, *, chains: int = 5, ppc_draws: int = 500,
+            batch_size: int = 20, seed: int = 20260919, root: Path = ROOT) -> Path:
     import hddm  # Deferred: unit tests and CLI validation do not require HDDM.
 
     spec = load_models(root)[model]
@@ -534,12 +618,13 @@ def run_ppc(study: str, model: str, *, chains: int = 5, ppc_draws: int = 250,
     output.mkdir(parents=True, exist_ok=True)
     manifest_path = output / f'{prefix}_ppc_run.json'
     allocated = split_draws(ppc_draws, chains)
+    split_batches(max(allocated), batch_size)  # Validate before creating the fit outputs.
     rng = np.random.default_rng(seed)
     # Set RNG just before each post_pred_gen call: HDDM uses NumPy global random state.
     details = {'study':study, 'model':model, 'fit_manifest':str(files[0].parent / f'{prefix}_run.json'),
-               'status':'running', 'chains':chains, 'ppc_draws_requested':ppc_draws,
+               'status':'running', 'chains':chains, 'ppc_draws_requested':ppc_draws, 'batch_size':batch_size,
                'draws_per_chain':allocated, 'seed':seed, 'started_utc':datetime.now(timezone.utc).isoformat(),
-               'ppc_method':'HDDM post_pred_gen, append_data=True',
+               'ppc_method':'HDDM post_pred_gen, append_data=False; verified per-node trial alignment',
                'rt_quintile':'independent rank quintiles in each predictive dataset',
                'dwell_quintile':'empirical corrected Dwell_S - Dwell_E rank quintile, fixed across replicates',
                'group_average':'equal weighting of participant-level means',
@@ -561,17 +646,35 @@ def run_ppc(study: str, model: str, *, chains: int = 5, ppc_draws: int = 250,
             verify_fit_observed(hddm_model.data, prepared)
         np.random.seed(int(rng.integers(1, 2**31 - 1)))
         print(f'PREDICT {model}/{study} chain {ci}: {count} full trial datasets', flush=True)
-        raw_pred = hddm.utils.post_pred_gen(hddm_model, samples=count, append_data=True)
-        flat = safe_reset_index(raw_pred)
-        del raw_pred
-        predicted = attach_predictive_outcomes(flat, observed, model, ci)
-        del flat
-        for draw, block in predicted.groupby('ppc_draw', sort=False):
-            rows, subjects = draw_metrics(block, study, model, draw)
-            draw_rows.extend(rows)
-            subject_rows.extend(subjects)
-        print(f'PASS chain {ci}: {predicted.ppc_draw.nunique()} aligned replicates', flush=True)
-        del predicted, hddm_model
+        generated = 0
+        for batch_i, batch_count in enumerate(split_batches(count, batch_size), start=1):
+            # Generate/aggregate one small batch, then immediately discard trial-level data.
+            raw_pred = hddm.utils.post_pred_gen(
+                hddm_model, samples=batch_count, append_data=False)
+            flat = align_predictions_by_observed_node(raw_pred, hddm_model)
+            del raw_pred
+            predicted = attach_predictive_outcomes(flat, observed, model, ci)
+            del flat
+            # post_pred_gen restarts draw numbering on every call: namespace each batch.
+            predicted['ppc_draw'] = (f'{ci}:batch{batch_i}:' +
+                                     predicted['ppc_draw'].astype(str))
+            actual = predicted.ppc_draw.nunique()
+            if actual != batch_count:
+                raise RuntimeError(f'Chain {ci} batch {batch_i}: expected '
+                                   f'{batch_count} datasets, got {actual}')
+            for draw, block in predicted.groupby('ppc_draw', sort=False):
+                rows, subjects = draw_metrics(block, study, model, draw)
+                draw_rows.extend(rows)
+                subject_rows.extend(subjects)
+            generated += actual
+            print(f'PREDICT {model}/{study} chain {ci}: '
+                  f'{generated}/{count} datasets summarised', flush=True)
+            del predicted
+            gc.collect()
+        if generated != count:
+            raise RuntimeError(f'Chain {ci}: generated {generated}, expected {count}')
+        print(f'PASS chain {ci}: {generated} aligned replicates', flush=True)
+        del hddm_model
         gc.collect()
 
     sim_metrics = pd.DataFrame(draw_rows)
@@ -616,13 +719,15 @@ def main(argv=None):
     parser.add_argument('--study', choices=['study1','study2'], required=True)
     parser.add_argument('--model', choices=[*load_models(), 'all'], required=True)
     parser.add_argument('--chains',type=int,default=5)
-    parser.add_argument('--draws',type=int,default=250,
+    parser.add_argument('--draws',type=int,default=500,
                         help='Number of full replicated trial datasets pooled across chains')
+    parser.add_argument('--batch-size',type=int,default=20,
+                        help='Replicated datasets per post_pred_gen call (limits peak RAM)')
     parser.add_argument('--seed',type=int,default=20260919)
     args=parser.parse_args(argv)
     models=list(load_models()) if args.model=='all' else [args.model]
     for model in models:
-        run_ppc(args.study,model,chains=args.chains,ppc_draws=args.draws,seed=args.seed)
+        run_ppc(args.study,model,chains=args.chains,ppc_draws=args.draws,batch_size=args.batch_size,seed=args.seed)
 
 if __name__ == '__main__':
     main()

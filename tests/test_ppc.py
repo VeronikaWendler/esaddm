@@ -9,7 +9,7 @@ from esaddm.models import ROOT, check_input, load_models
 from esaddm.ppc import (
     OBS_E, OBS_S, PPC_E, PPC_S, TRIAL_KEYS, attach_predictive_outcomes,
     bin_means, observed_metrics, prepare_observed, rank_quintile,
-    split_draws, summarise_metrics, subject_boxplot_data, draw_metrics,
+    split_draws, split_batches, summarise_metrics, subject_boxplot_data, draw_metrics,
 )
 
 
@@ -18,6 +18,9 @@ def test_colors_and_replicate_allocation():
     assert (OBS_S, PPC_S) == ('darkorchid', 'indigo')
     assert split_draws(250, 5) == [50, 50, 50, 50, 50]
     assert split_draws(253, 5) == [51, 51, 51, 50, 50]
+    assert split_draws(500, 5) == [100] * 5
+    assert split_batches(100, 20) == [20] * 5
+    assert split_batches(103, 20) == [20, 20, 20, 20, 20, 3]
 
 
 def test_quintiles_stable_for_equal_values():
