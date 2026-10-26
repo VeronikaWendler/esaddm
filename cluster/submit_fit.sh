@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Examples:
+# This is how you submit the models:
 #   bash cluster/submit_fit.sh smoke study1 esaddm_z
 #   bash cluster/submit_fit.sh run study1 esaddm_z
 #   bash cluster/submit_fit.sh run both all
@@ -40,7 +40,7 @@ submit_one() {
 }
 
 if [[ "$action" == check ]]; then
-    # A single cheap diagnostic job, even when checking both studies and all models.
+    # single diagnostic job, even when checking both studies and all models
     submit_one "$study" "$model"
 elif [[ "$action" == smoke ]]; then
     submit_one "$study" "$model"
@@ -49,7 +49,7 @@ else
     models=("$model")
     [[ "$study" == both ]] && studies=(study1 study2)
     [[ "$model" == all ]] && models=(accuracy_es accuracy_ee addm addm_z esaddm esaddm_z)
-    # One job per STUDY x MODEL
+    # One job per study and model
     for st in "${studies[@]}"; do
         for md in "${models[@]}"; do
             submit_one "$st" "$md"
