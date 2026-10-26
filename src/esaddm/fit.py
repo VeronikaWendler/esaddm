@@ -38,6 +38,9 @@ def run_chain(*, study: str, model_name: str, chain: int, samples: int,
     spec = load_models(root)[model_name]
     data, _ = check_input(study, spec, root)
 
+    # Remove metadata not used by the HDDM likelihood
+    data = data.drop(columns=["value_tie"], errors="ignore")
+
     out_dir = root / "studies" / study / "results" / output_type / model_name
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -114,6 +117,14 @@ def run_chain(*, study: str, model_name: str, chain: int, samples: int,
                     cleaned = values.copy()
                     cleaned[missing] = np.nan
                     dataset[variable].values = cleaned
+
+
+    # NetCDF4 cannot directly store Boolean variables
+    for group_name in infdata.groups():
+        dataset = infdata[group_name]
+        for variable in list(dataset.variables):
+            if dataset[variable].dtype.kind == "b":
+                dataset[variable] = dataset[variable].astype("int8")
 
     # Save ArviZ InferenceData
     az.to_netcdf(infdata, str(nc_path))

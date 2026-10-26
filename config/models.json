@@ -2,11 +2,11 @@
   "note": "Declarative design manifest only. Fitting is intentionally NOT implemented in milestone 1.",
   "accuracy_es": {
     "input": "accuracy_es.csv", "coordinate": "higher_value_upper", "intercept": false,
-    "drift_formula": "v ~ 0 + attention_w + inattention_w", "estimate_z": true
+    "drift_formula": "v ~ 0 + attention_w + inattention_w", "estimate_z": false
   },
   "accuracy_ee": {
     "input": "accuracy_ee.csv", "coordinate": "higher_value_upper", "intercept": false,
-    "drift_formula": "v ~ 0 + attention_w + inattention_w", "estimate_z": true
+    "drift_formula": "v ~ 0 + attention_w + inattention_w", "estimate_z": false
   },
   "addm": {
     "input": "identity_es.csv", "coordinate": "s_upper_e_lower", "intercept": false,
