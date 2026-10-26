@@ -30,7 +30,7 @@ def test_quintiles_stable_for_equal_values():
 
 
 @pytest.mark.parametrize('study', ['study1', 'study2'])
-@pytest.mark.parametrize('model', ['accuracy_es', 'accuracy_ee', 'esaddm_z'])
+@pytest.mark.parametrize('model', ['accuracy_es', 'accuracy_ee', 'addm', 'addm_z', 'esaddm', 'esaddm_z'])
 def test_real_prepared_trial_metadata(study, model):
     spec = load_models()[model]
     if not (ROOT / 'studies' / study / 'data' / 'prepared' / spec.input_name).exists():
@@ -40,7 +40,7 @@ def test_real_prepared_trial_metadata(study, model):
     assert len(obs) == len(prepared)
     rows, subjects = observed_metrics(obs, study, model)
     assert rows and subjects
-    if model == 'esaddm_z':
+    if model in ('addm', 'addm_z', 'esaddm', 'esaddm_z'):
         assert obs.is_tie.any()
         assert obs.accuracy_value.isna().sum() == int(obs.is_tie.sum())
         assert obs.accuracy_value.notna().sum() + obs.is_tie.sum() == len(obs)

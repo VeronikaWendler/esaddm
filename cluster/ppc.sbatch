@@ -13,7 +13,7 @@ image="${IMAGE:-$HOME/containers/hddm_latest.sif}"
 study="${1:?study required}"
 model="${2:?model required}"
 
-# Match the fitting container; keep Matplotlib's config in a writable location.
+# PPC simulation only. Plots/tables are a separate job: submit_ppc_plot.sh.
 cache_root="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
 mkdir -p "$cache_root/esaddm_mpl_${SLURM_JOB_ID:-local}"
 
@@ -22,5 +22,5 @@ apptainer exec --cleanenv --bind "$root:$root" --pwd "$root" \
   PYTHONUNBUFFERED=1 MPLBACKEND=Agg \
   MPLCONFIGDIR="$cache_root/esaddm_mpl_${SLURM_JOB_ID:-local}" \
   python -m esaddm.ppc --study "$study" --model "$model" \
-    --chains "${CHAINS:-5}" --draws "${PPC_DRAWS:-500}" --batch-size "${PPC_BATCH_SIZE:-20}" \
+    --chains "${CHAINS:-5}" --draws "${PPC_DRAWS:-1000}" --batch-size "${PPC_BATCH_SIZE:-500}" \
     --seed "${PPC_SEED:-20260919}"

@@ -1,4 +1,4 @@
-"""Lean, trial-aligned posterior predictive checks for the six ESaDDM models.
+"""Generate and save trial-aligned posterior predictive summary draws for all six models.
 
 Each run reads already-fitted HDDM chains; it never fits or modifies models.
 500 replicated full datasets by default (100 from each of five chains),
@@ -23,10 +23,6 @@ import json
 from pathlib import Path
 import re
 
-import arviz as az
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -466,144 +462,6 @@ def subject_boxplot_data(obs_subjects: pd.DataFrame, sim_subjects: pd.DataFrame,
     return out
 
 
-def style_plot(ax):
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.spines['left'].set_linewidth(1.4)
-    ax.spines['bottom'].set_linewidth(1.4)
-    ax.tick_params(labelsize=FONT_TICKS, width=1.2)
-    ax.grid(False)
-
-
-def save_plot(fig, output: Path):
-    output.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output.with_suffix('.png'), dpi=300, bbox_inches='tight', facecolor='white')
-    fig.savefig(output.with_suffix('.pdf'), bbox_inches='tight', facecolor='white')
-    plt.close(fig)
-
-
-def plot_boxplots(subject_data: pd.DataFrame, study: str, model: str, output: Path,
-                  metric: str):
-    data = subject_data.loc[subject_data.metric.eq(metric)].copy()
-    if model == 'accuracy_ee':
-        groups = ['Overall'] if metric == 'accuracy' else ['Correct', 'Error']
-    else:
-        groups = ['E', 'S']
-    fig, ax = plt.subplots(figsize=(12.5, 8.1))
-    rng = np.random.default_rng(20260919)
-    if groups == ['E', 'S']:
-        # Gray paired lines, as in the original behavioural talk plots.
-        left = data.loc[data.group.eq('E')].set_index('subj_idx')
-        right = data.loc[data.group.eq('S')].set_index('subj_idx')
-        for sid in left.index.intersection(right.index):
-            ax.plot([-.18, .82],
-                    [left.at[sid, 'empirical_value'], right.at[sid, 'empirical_value']],
-                    color='#999999', alpha=.25, linewidth=.9, zorder=0)
-    for i, group in enumerate(groups):
-        sub = data.loc[data.group.eq(group)].sort_values('subj_idx')
-        if sub.empty:
-            raise ValueError(f'Missing {metric} group {group}')
-        emp_color = {'E':OBS_E, 'S':OBS_S}.get(group, OBS_OTHER)
-        pred_color = {'E':PPC_E, 'S':PPC_S}.get(group, PPC_OTHER)
-        for offset, name, color in [(-.18, 'empirical_value', emp_color),
-                                    (.18, 'ppc_subject_mean', pred_color)]:
-            x = i + offset
-            bp = ax.boxplot(sub[name].to_numpy(), positions=[x], widths=.27,
-                            patch_artist=True, showfliers=False,
-                            medianprops={'color':'#252525','linewidth':2.4},
-                            whiskerprops={'color':'#444444','linewidth':1.2},
-                            capprops={'color':'#444444','linewidth':1.2})
-            bp['boxes'][0].set_facecolor(color)
-            bp['boxes'][0].set_alpha(.78)
-            bp['boxes'][0].set_edgecolor('#282828')
-            scatterx = x + rng.uniform(-.052,.052, size=len(sub))
-            ax.scatter(scatterx, sub[name], color='#333333', alpha=.50, s=28, zorder=4)
-        # Keep subject identities explicit for the empirical E/S contrast
-    ax.set_xticks(range(len(groups)))
-    ax.set_xticklabels(groups, fontsize=FONT_AXIS)
-    ax.set_ylabel('Mean RT (seconds)' if metric == 'mean_rt' else 'Mean accuracy (0–1)',
-                  fontsize=FONT_AXIS)
-    if metric == 'accuracy':
-        ax.set_ylim(0, 1.05)
-    ax.set_title(('Mean RT' if metric == 'mean_rt' else 'Mean accuracy') +
-                 f' — {model} ({study})', fontsize=FONT_TITLE, pad=18)
-    import matplotlib.patches as mpatches
-    if model == 'accuracy_ee':
-        legend_items = [mpatches.Patch(facecolor=OBS_OTHER, label='Empirical'),
-                        mpatches.Patch(facecolor=PPC_OTHER, label='PPC')]
-    else:
-        legend_items = [mpatches.Patch(facecolor=OBS_E, label='Empirical E'),
-                        mpatches.Patch(facecolor=PPC_E, label='PPC E'),
-                        mpatches.Patch(facecolor=OBS_S, label='Empirical S'),
-                        mpatches.Patch(facecolor=PPC_S, label='PPC S')]
-    ax.legend(handles=legend_items, fontsize=15, frameon=False,
-              ncol=2, loc='best')
-    style_plot(ax)
-    fig.tight_layout()
-    save_plot(fig, output)
-
-
-def _curve_slice(curves, metric):
-    part = curves.loc[curves.metric.eq(metric)].sort_values('quintile')
-    if len(part)!=5 or not np.array_equal(part.quintile.to_numpy(), np.array(QUINTILES)):
-        raise ValueError(f'Incomplete quintile PPC curve for {metric}')
-    return part
-
-
-def plot_choice_rt(curves: pd.DataFrame, study: str, model: str, output: Path):
-    rows = _curve_slice(curves, 'p_choose_s_by_rt_quintile')
-    x = np.asarray(QUINTILES, dtype=float)
-    fig, ax = plt.subplots(figsize=(12.5, 8.0))
-    for choice, shift, obs_color, pred_color in (
-        ('E', -.12, OBS_E, PPC_E), ('S', +.12, OBS_S, PPC_S)
-    ):
-        empirical = rows.empirical.to_numpy(float) if choice == 'S' else 1-rows.empirical.to_numpy(float)
-        ppc = rows.ppc_mean.to_numpy(float) if choice == 'S' else 1-rows.ppc_mean.to_numpy(float)
-        low = rows.ppc_pi95_low.to_numpy(float) if choice == 'S' else 1-rows.ppc_pi95_high.to_numpy(float)
-        high = rows.ppc_pi95_high.to_numpy(float) if choice == 'S' else 1-rows.ppc_pi95_low.to_numpy(float)
-        ax.bar(x + shift, empirical, width=.23, alpha=.76, color=obs_color,
-               edgecolor='#222222', linewidth=1.0, label=f'Empirical {choice}', zorder=1)
-        ax.plot(x+shift, ppc, color=pred_color, marker='o', linewidth=3.5,
-                markersize=10, label=f'PPC {choice}', zorder=4)
-        ax.errorbar(x+shift, ppc, yerr=[ppc-low, high-ppc], fmt='none',
-                    ecolor=pred_color, elinewidth=2.2, capsize=5, zorder=3)
-    ax.set_xticks(x)
-    ax.set_xlabel('RT quintile (fastest → slowest)', fontsize=FONT_AXIS)
-    ax.set_ylabel('Choice probability', fontsize=FONT_AXIS)
-    ax.set_ylim(0, 1.0)
-    ax.set_title(f'Choice by RT quintile — {model} ({study})', fontsize=FONT_TITLE, pad=18)
-    ax.legend(frameon=False, fontsize=15, ncol=2)
-    style_plot(ax)
-    fig.tight_layout()
-    save_plot(fig, output)
-
-
-def plot_dwell(curves: pd.DataFrame, study: str, model: str, output: Path):
-    rows = _curve_slice(curves, 'p_choose_s_by_dwell_quintile')
-    x = np.asarray(QUINTILES, dtype=float)
-    fig, ax = plt.subplots(figsize=(12.5, 8.0))
-    ax.bar(x, rows.empirical.to_numpy(float), width=.72, facecolor=OBS_S, alpha=.76,
-           edgecolor='#222222', linewidth=1.0, label='Empirical P(S)', zorder=1)
-    ax.plot(x, rows.ppc_mean.to_numpy(float), color=PPC_S, marker='o', linewidth=3.4,
-            markersize=10, label='PPC P(S)', zorder=4)
-    pred = rows.ppc_mean.to_numpy(float)
-    ax.errorbar(x, pred, yerr=[pred - rows.ppc_pi95_low.to_numpy(float),
-                              rows.ppc_pi95_high.to_numpy(float) - pred],
-                fmt='none', ecolor=PPC_S, elinewidth=2.1, capsize=5, zorder=3)
-    ax.set_xticks(x)
-    # Rank quintiles do not guarantee that the middle bin is truly zero.
-    ax.set_xticklabels(['Q1', 'Q2', 'Q3', 'Q4', 'Q5'], fontsize=FONT_TICKS)
-    ax.set_xlabel('Dwell-time advantage quintile (S − E, ms)', fontsize=FONT_AXIS)
-    ax.set_ylabel('P(choose S)', fontsize=FONT_AXIS)
-    ax.set_ylim(0, 1)
-    ax.set_title(f'Choice by dwell-time advantage — {model} ({study})',
-                 fontsize=FONT_TITLE, pad=18)
-    ax.legend(frameon=False, fontsize=17)
-    style_plot(ax)
-    fig.tight_layout()
-    save_plot(fig, output)
-
-
 def run_ppc(study: str, model: str, *, chains: int = 5, ppc_draws: int = 500,
             batch_size: int = 20, seed: int = 20260919, root: Path = ROOT) -> Path:
     import hddm  # Deferred: unit tests and CLI validation do not require HDDM.
@@ -629,24 +487,35 @@ def run_ppc(study: str, model: str, *, chains: int = 5, ppc_draws: int = 500,
                'dwell_quintile':'empirical corrected Dwell_S - Dwell_E rank quintile, fixed across replicates',
                'group_average':'equal weighting of participant-level means',
                'tie_handling':'identity ES ties retained except undefined accuracy',
-               'boxplot_ppc':'distribution of subject-level predictive means across posterior replicates'}
+               'boxplot_ppc':'distribution of subject-level predictive means across posterior replicates',
+               'output_stage':'generation only: tables and figures built with esaddm.ppc_plot'}
     manifest_path.write_text(json.dumps(details,indent=2)+'\n',encoding='utf-8')
     observed = None
     observed_metrics_rows = None
     observed_subjects = None
     draw_rows, subject_rows = [], []
+    # Save raw simulated RT/choice with minimal columns, streamed per chain.
+    # This permits additional PPC analyses later without repeating HDDM simulation.
+    trial_dir = output / 'data' / 'trials'
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    trial_archives = []
     for ci, (path, count) in enumerate(zip(files, allocated), start=1):
         print(f'LOADING {model}/{study} chain {ci}/{chains}: {path}', flush=True)
         hddm_model = hddm.load(str(path))
         if observed is None:
             observed = prepare_observed(study, model, prepared, hddm_model.data, root)
             observed_metrics_rows, observed_subjects = observed_metrics(observed, study, model)
+            obs_trials = trial_dir / f'{prefix}_observed_trials.csv.gz'
+            observed.to_csv(obs_trials, index=False, compression='gzip')
+            trial_archives.append(str(obs_trials.relative_to(output)))
         else:
             # Compare every chain's fitted data with the same prepared input.
             verify_fit_observed(hddm_model.data, prepared)
         np.random.seed(int(rng.integers(1, 2**31 - 1)))
         print(f'PREDICT {model}/{study} chain {ci}: {count} full trial datasets', flush=True)
         generated = 0
+        sim_trial_file = trial_dir / f'{prefix}_simulated_chain{ci}.csv.gz'
+        trial_archives.append(str(sim_trial_file.relative_to(output)))
         for batch_i, batch_count in enumerate(split_batches(count, batch_size), start=1):
             # Generate/aggregate one small batch, then immediately discard trial-level data.
             raw_pred = hddm.utils.post_pred_gen(
@@ -666,6 +535,11 @@ def run_ppc(study: str, model: str, *, chains: int = 5, ppc_draws: int = 500,
                 rows, subjects = draw_metrics(block, study, model, draw)
                 draw_rows.extend(rows)
                 subject_rows.extend(subjects)
+            # Write each batch immediately: no accumulation of 500 trial-level datasets.
+            trial_cols = ['ppc_draw', *TRIAL_KEYS, 'subj_idx', 'rt_value', 'response_sampled']
+            predicted[trial_cols].to_csv(
+                sim_trial_file, index=False, mode='wt' if batch_i == 1 else 'at',
+                header=(batch_i == 1), compression='gzip', float_format='%.10g')
             generated += actual
             print(f'PREDICT {model}/{study} chain {ci}: '
                   f'{generated}/{count} datasets summarised', flush=True)
@@ -677,45 +551,50 @@ def run_ppc(study: str, model: str, *, chains: int = 5, ppc_draws: int = 500,
         del hddm_model
         gc.collect()
 
+    # Persist the sufficient summaries *before* any plotting/tables. The PPC
+    # simulation must be run only once; plots and presentation tables can be
+    # rebuilt independently from these saved per-draw/per-subject metrics.
     sim_metrics = pd.DataFrame(draw_rows)
     sim_subjects = pd.DataFrame(subject_rows)
-    observed_metrics_df = pd.DataFrame(observed_metrics_rows)
-    observed_subjects_df = pd.DataFrame(observed_subjects)
+    empirical_metrics = pd.DataFrame(observed_metrics_rows)
+    empirical_subjects = pd.DataFrame(observed_subjects)
     n_generated = sim_metrics['draw'].nunique()
-    if n_generated != ppc_draws:
-        raise ValueError(f'Only {n_generated} draws produced; requested {ppc_draws}')
-    core, curves = summarise_metrics(observed_metrics_df, sim_metrics)
-    subject_boxes = subject_boxplot_data(observed_subjects_df, sim_subjects, model, study)
-    core.insert(0,'study',study)
-    core.insert(1,'model',model)
-    curves.insert(0,'study',study)
-    curves.insert(1,'model',model)
-    output.mkdir(parents=True, exist_ok=True)
-    core.to_csv(output / f'{prefix}_ppc_core_summary.csv',index=False,float_format='%.7f')
-    curves.to_csv(output / f'{prefix}_ppc_quintile_curves.csv',index=False,float_format='%.7f')
-    subject_boxes.to_csv(output / f'{prefix}_ppc_subject_boxplot_values.csv',index=False,float_format='%.7f')
-    sim_metrics.to_csv(output / f'{prefix}_ppc_draw_metrics.csv',index=False,float_format='%.7f')
+    if n_generated != ppc_draws or sim_subjects['draw'].nunique() != ppc_draws:
+        raise ValueError(f'Only {n_generated} predictive datasets produced; requested {ppc_draws}')
 
-    fig_dir = output / 'plots'
-    plot_boxplots(subject_boxes,study,model,fig_dir / f'{prefix}_ppc_mean_rt', 'mean_rt')
-    plot_boxplots(subject_boxes,study,model,fig_dir / f'{prefix}_ppc_mean_accuracy', 'accuracy')
-    if model in IDENTITY_MODELS:
-        plot_choice_rt(curves,study,model,fig_dir / f'{prefix}_ppc_choice_rt_quintile')
-        plot_dwell(curves,study,model,fig_dir / f'{prefix}_ppc_dwell_quintile')
-    details['ppc_draws_generated']=int(n_generated)
-    details['rows_in_fitted_data']=int(len(observed))
-    details['participants']=int(observed.subj_idx.nunique())
-    details['plots']=['mean_rt','mean_accuracy'] + (
-        ['choice_rt_quintile','dwell_quintile'] if model in IDENTITY_MODELS else [])
-    details['status']='completed'
-    details['finished_utc']=datetime.now(timezone.utc).isoformat()
-    manifest_path.write_text(json.dumps(details,indent=2)+'\n',encoding='utf-8')
-    print(f'PASS PPC {study}/{model}: {n_generated} full datasets, {len(details["plots"])} plots', flush=True)
+    data_dir = output / 'data'
+    data_dir.mkdir(parents=True, exist_ok=True)
+    saved = {
+        'observed_metrics': empirical_metrics,
+        'observed_subject_metrics': empirical_subjects,
+        'replicate_metrics': sim_metrics,
+        'replicate_subject_metrics': sim_subjects,
+    }
+    for label, frame in saved.items():
+        target = data_dir / f'{prefix}_{label}.csv'
+        temporary = target.with_suffix('.csv.part')
+        frame.to_csv(temporary, index=False, float_format='%.10g')
+        temporary.replace(target)
+        print(f'SAVED PPC DATA: {target} ({len(frame)} rows)', flush=True)
+
+    details.update({
+        'ppc_draws_generated': int(n_generated),
+        'rows_in_fitted_data': int(len(observed)),
+        'participants': int(observed.subj_idx.nunique()),
+        'saved_data_files': [str((data_dir / f'{prefix}_{label}.csv').relative_to(output))
+                             for label in saved],
+        'saved_trial_archives': trial_archives,
+        'status': 'completed',
+        'finished_utc': datetime.now(timezone.utc).isoformat(),
+    })
+    manifest_path.write_text(json.dumps(details, indent=2) + '\n', encoding='utf-8')
+    print(f'PASS PPC GENERATION {study}/{model}: {n_generated} aligned replicated '
+          f'datasets saved; no tables or figures generated', flush=True)
     return output
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description='Lean full-model posterior predictive checks')
+    parser = argparse.ArgumentParser(description='Generate and persist PPC simulations, without making figures or summary tables')
     parser.add_argument('--study', choices=['study1','study2'], required=True)
     parser.add_argument('--model', choices=[*load_models(), 'all'], required=True)
     parser.add_argument('--chains',type=int,default=5)

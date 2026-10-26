@@ -2,6 +2,7 @@
 # Examples:
 #   bash cluster/submit_ppc.sh study1 esaddm_z
 #   bash cluster/submit_ppc.sh study1 all
+# Generates ONLY saved PPC data. Plot later via submit_ppc_plot.sh.
 #   PPC_DRAWS=500 bash cluster/submit_ppc.sh study2 all
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -20,7 +21,7 @@ for st in "${studies[@]}"; do
   for md in "${models[@]}"; do
     echo "Submitting PPC $st/$md" >&2
     sbatch --chdir="$root" --job-name="ppc_${st}_${md}" \
-      --time="${PPC_WALLTIME:-24:00:00}" --mem="${PPC_MEM:-64G}" \
+      --time="${PPC_WALLTIME:-24:00:00}" --mem="${PPC_MEM:-128G}" \
       --cpus-per-task=1 \
       --output="$root/logs/slurm/ppc_${st}_${md}_%j.out" \
       --error="$root/logs/slurm/ppc_${st}_${md}_%j.err" \
