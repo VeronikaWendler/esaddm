@@ -1,4 +1,4 @@
-"""Pure parameter-recovery tests; real HDDM fitting is tested on BlueBEAR."""
+"""Tests for parameter-recovery calculations and file handling."""
 import sys
 import types
 from pathlib import Path
@@ -67,16 +67,16 @@ def test_trial_generator_uses_hddm_simulator_model_and_regression(monkeypatch):
     assert np.all(theta[:,4:] == 0)
 
 
-def test_synthetic_outlier_and_min_rt_without_any_real_hddm(monkeypatch):
+def test_simulated_choices_and_rt_screening(monkeypatch):
     design = pd.DataFrame({'subj_idx':[1]*12, 'attention_w':[1.]*12,
                            'inattention_w':[0.]*12, 'attention_contrast':[0.]*12,
                            'inattention_contrast':[0.]*12})
     monkeypatch.setattr(r, 'make_trial_parameters', lambda *_: np.zeros((12,7)))
     monkeypatch.setattr(r, '_draw_ddm', lambda th: (np.full(len(th), .51),
                                                   np.arange(len(th))%2))
-    frame, outliers, rounds = r.generate_synthetic(design, {1:{}}, seed=20,
-                                                  min_rt=.25, p_outlier=0)
-    assert len(frame)==12 and outliers == 0 and rounds == 0
+    frame, rounds = r.generate_synthetic(design, {1:{}}, seed=20,
+                                         min_rt=.25)
+    assert len(frame)==12 and rounds == 0
     assert set(frame.response) == {0,1}
     assert (frame.rt >= .25).all()
 
@@ -111,7 +111,7 @@ def test_invalid_group_trace_missing_fails_loudly():
 
 
 def test_one_recovery_replicate_plumbing_saves_only_small_outputs(monkeypatch, tmp_path):
-    """Mocked plumbing only; real HDDM sampling must be piloted on BlueBEAR."""
+    """check recovery outputs with a small fitted-model stub."""
     import json
     spec = types.SimpleNamespace(
         coordinate='s_upper_e_lower', estimate_z=True,
@@ -135,8 +135,8 @@ def test_one_recovery_replicate_plumbing_saves_only_small_outputs(monkeypatch, t
     truth.update({k:float(v) for k,v in r.parameter_dict(truth).items()})
     monkeypatch.setattr(r, 'get_truth', lambda model, subjects, seed: (truth, {1:truth,2:truth}, 17))
     monkeypatch.setattr(r, 'generate_synthetic', lambda frame, truth_subj, seed, min_rt: (
-        frame.assign(rt=.7, response=1)[['subj_idx','rt','response',*r.REGRESSORS]],1,0))
-    def fake_fit(study, rep, chain, synthetic_csv, out, subjects, samples, burn, seed, spec, root_str):
+        frame.assign(rt=.7, response=1)[['subj_idx','rt','response',*r.REGRESSORS]],0))
+    def fake_fit(study, rep, chain, synthetic_csv, out, subjects, samples, burn, seed, spec):
         rng = np.random.default_rng(seed)
         arrays = {}
         for k in r.DIRECT:
@@ -156,3 +156,130 @@ def test_one_recovery_replicate_plumbing_saves_only_small_outputs(monkeypatch, t
     assert r.run_rep('study1',0,root=tmp_path,reps=1,chains=4,samples=240,burn=40,jobs=1) == folder
     with pytest.raises(FileExistsError):
         r.run_rep('study1',0,root=tmp_path,reps=1,chains=4,samples=260,burn=40,jobs=1)
+
+
+def test_parallel_chain_launcher_uses_independent_workers_and_limits_jobs(monkeypatch, tmp_path):
+    """chain workers run as independent processes."""
+    seen = []
+    class FakeProcess:
+        def __init__(self, command, cwd):
+            self.command = command
+            self.returncode = 0
+            seen.append(command)
+            chain = command[command.index('--worker-chain') + 1]
+            (tmp_path / f'chain{chain}.npz').touch()
+        def poll(self): return self.returncode
+        def wait(self, timeout=None): return self.returncode
+        def terminate(self): self.returncode = -15
+        def kill(self): self.returncode = -9
+
+    monkeypatch.setattr(r.subprocess, 'Popen', FakeProcess)
+    monkeypatch.setattr(r.time, 'sleep', lambda _: None)
+    remaining = [(i, str(tmp_path / f'chain{i}.npz')) for i in range(1, 5)]
+    r.launch_independent_chain_processes('study1', 0, remaining, root=tmp_path,
+                                         chains=4, samples=4000, burn=1000,
+                                         seed=20261026, jobs=2)
+    assert len(seen) == 4
+    assert {cmd[cmd.index('--worker-chain')+1] for cmd in seen} == {'1','2','3','4'}
+    assert all(cmd[:3] == [r.sys.executable, '-m', 'esaddm.recovery'] for cmd in seen)
+
+
+def test_parallel_chain_launcher_fails_closed_on_worker_exit(monkeypatch, tmp_path):
+    class FailedProcess:
+        def __init__(self, command, cwd): self.returncode = 17
+        def poll(self): return self.returncode
+        def wait(self, timeout=None): return self.returncode
+        def terminate(self): self.returncode = -15
+        def kill(self): self.returncode = -9
+    monkeypatch.setattr(r.subprocess, 'Popen', FailedProcess)
+    remaining = [(1, str(tmp_path / 'chain1.npz'))]
+    with pytest.raises(RuntimeError, match='failed'):
+        r.launch_independent_chain_processes('study1', 0, remaining, root=tmp_path,
+                                             chains=4, samples=4000, burn=1000,
+                                             seed=20261026, jobs=4)
+    assert not (tmp_path / 'chain1.npz').exists()
+
+
+def test_theta_is_derived_drawwise_and_saved_with_recovery():
+    """calculate theta from matched posterior draws."""
+    p = dict(b_a=np.array([1., 3.]), b_i=np.array([.4, 1.2]),
+             delta_a=np.array([.2, -.2]), delta_i=np.array([.1, .3]))
+    d = r.parameter_dict(p)
+    assert np.allclose(d['theta_s'], d['b_is'] / d['b_as'])
+    assert np.allclose(d['theta_e'], d['b_ie'] / d['b_ae'])
+    assert np.allclose(d['delta_theta_s_minus_e'], d['theta_s'] - d['theta_e'])
+    # averaging ratios is not the same as dividing average coefficients
+    assert not np.isclose(d['theta_s'].mean(), d['b_is'].mean() / d['b_as'].mean())
+
+
+def test_undefined_ratio_is_flagged_without_breaking_primary_recovery():
+    """flag unstable theta values while saving primary parameters."""
+    rng = np.random.default_rng(322)
+    p = dict(a=1.5, t=.32, z=.53, b_a=0., b_i=.8,
+             delta_a=0., delta_i=.3)
+    p.update({k: float(v) for k, v in r.parameter_dict(p).items()})
+    traces = []
+    for c in range(4):
+        d = {}
+        for k in r.DIRECT:
+            # theta is undefined when the attended coefficient is zero
+            x = (np.zeros(250) if k in ('b_a', 'delta_a') else
+                 rng.normal(p[k], .01, size=250))
+            d['group__'+k] = x
+            d['subj1__'+k] = x.copy()
+        traces.append(d)
+    summary, _ = r.summarise_chains(traces, p, {1:p}, [1], 'study1', 0)
+    ratios = summary.loc[summary.parameter.isin(r.RATIOS)]
+    assert len(ratios) == 2*len(r.RATIOS)
+    assert ratios.recovered_mean.isna().all()
+    assert ratios.ratio_warning.str.contains('insufficient_defined_ratio_draws').all()
+    assert summary.loc[summary.parameter.eq('a'), 'recovered_mean'].notna().all()
+
+
+def test_recovery_mcmc_defaults_match_empirical_fit():
+    assert r.DEFAULT_CHAINS == 5
+    assert r.DEFAULT_SAMPLES == 5000
+    assert r.DEFAULT_BURN == 1000
+    assert r.DEFAULT_PARALLEL_JOBS == 4
+
+
+def test_simulated_outcomes_match_hddm_simulator(monkeypatch):
+    """simulated outcomes are returned unchanged when rt passes the cutoff."""
+    design = pd.DataFrame({'subj_idx': [1] * 6,
+                           'attention_w': [1.] * 6,
+                           'inattention_w': [0.] * 6,
+                           'attention_contrast': [0.] * 6,
+                           'inattention_contrast': [0.] * 6})
+    monkeypatch.setattr(r, 'make_trial_parameters', lambda *_: np.zeros((6, 7)))
+    calls = []
+    def sim(theta):
+        calls.append(len(theta))
+        return np.full(len(theta), 1.1), np.zeros(len(theta), dtype=int)
+    monkeypatch.setattr(r, '_draw_ddm', sim)
+    simulated, rounds = r.generate_synthetic(design, {1:{}}, seed=13, min_rt=.25)
+    assert calls == [6]
+    assert rounds == 0
+    assert np.allclose(simulated.rt, 1.1)
+    assert simulated.response.eq(0).all()
+    assert r.VERSION == 2
+
+
+def test_dataset_version_is_checked(monkeypatch, tmp_path):
+    import json
+    spec = types.SimpleNamespace(coordinate='s_upper_e_lower', estimate_z=True,
+                                 predictors=r.REGRESSORS)
+    monkeypatch.setattr(r, 'load_models', lambda root: {r.MODEL: spec})
+    design = pd.DataFrame({'subj_idx': [1], 'rt': [.7], 'response': [1],
+                           **{c: [1.] for c in r.REGRESSORS}})
+    monkeypatch.setattr(r, 'check_input', lambda *args: (design, {'rows': 1}))
+    monkeypatch.setitem(sys.modules, 'hddm', types.ModuleType('hddm'))
+    config = tmp_path / 'config'
+    config.mkdir()
+    (config/'study1.json').write_text(json.dumps({'min_rt_seconds': .25}))
+    rep = tmp_path/'studies/study1/results/recovery/esaddm_z/rep_00'
+    rep.mkdir(parents=True)
+    design.to_csv(rep/'synthetic.csv.gz', index=False, compression='gzip')
+    (rep/'truth.json').write_text(json.dumps({'study':'study1','rep':0,'version':1,
+                        'recovery_config': {'chains':5,'samples':5000,'burn':1000,'seed':20261026}}))
+    with pytest.raises(ValueError, match='format version'):
+        r.run_rep('study1', 0, root=tmp_path, reps=1, jobs=1)

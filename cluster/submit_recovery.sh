@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Example: bash cluster/submit_recovery.sh study1 0
-#          bash cluster/submit_recovery.sh both all
+# submit one or more parameter-recovery datasets for a study
+# examples: bash cluster/submit_recovery.sh study1 0
+#           bash cluster/submit_recovery.sh both all
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "$root"

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=esrec
-#SBATCH --mail-type=FAIL
+#SBATCH --mail-type=ALL
 set -euo pipefail
 module purge
 module load bluebear
@@ -12,8 +12,8 @@ image="${IMAGE:-$HOME/containers/hddm_latest.sif}"
 : "${SLURM_ARRAY_TASK_ID:?Recovery requires an array replicate ID}"
 
 args=(--study "$REC_STUDY" --rep "$SLURM_ARRAY_TASK_ID"
-      --reps "${REC_REPS:-10}" --chains "${REC_CHAINS:-4}"
-      --samples "${REC_SAMPLES:-4000}" --burn "${REC_BURN:-1000}"
+      --reps "${REC_REPS:-10}" --chains "${REC_CHAINS:-5}"
+      --samples "${REC_SAMPLES:-5000}" --burn "${REC_BURN:-1000}"
       --jobs "${SLURM_CPUS_PER_TASK:-4}" --seed "${REC_SEED:-20261026}")
 [[ "${REC_KEEP_TRACES:-0}" == 1 ]] && args+=(--keep-traces)
 
