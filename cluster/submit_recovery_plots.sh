@@ -1,6 +1,11 @@
 #!/bin/bash
+# Submit plotting only. Safe to rerun after data are available.
 set -euo pipefail
-REPO="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
-cd "$REPO"
-sbatch cluster/plot_recovery_study1.sbatch
-sbatch cluster/plot_recovery_study2.sbatch
+ROOT="/rds/projects/z/zhanglp-vwendler-core/esaddm"
+[[ -d "$ROOT/logs/slurm" ]] || mkdir -p "$ROOT/logs/slurm"
+[[ -f "$ROOT/scripts/plot_recovery.py" ]] || { echo "missing $ROOT/scripts/plot_recovery.py" >&2; exit 1; }
+cd "$ROOT"
+for study in study1 study2; do
+  echo "submitting $study recovery plotting from $ROOT"
+  sbatch "cluster/plot_recovery_${study}.sbatch"
+done

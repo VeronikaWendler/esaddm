@@ -319,7 +319,7 @@ def main():
             warnings.warn(f'{study}: some completed replicates failed convergence; inspect audit')
         if flagged:
             warnings.warn(f'{study}: ratio warnings in {flagged} parameter rows; inspect source table')
-        print(f'{study}: {len(audit)} replications, 14 parameters, plots/tables: {dest}')
+        print(f'completed {study}: {len(audit)} recovery replications; 7 fitted + 7 derived parameters; figures/tables: {dest}', flush=True)
 
 
 if __name__ == '__main__':
