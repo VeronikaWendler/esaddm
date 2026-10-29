@@ -21,7 +21,7 @@ mkdir -p "$MPLCONFIGDIR"
 
 echo "plot job=${SLURM_JOB_ID:-local} study=$STUDY host=$(hostname) root=$REPO"
 if python -c 'import numpy, pandas, matplotlib' >/dev/null 2>&1; then
-    python -u "$PLOT" --root "$REPO" --study "$STUDY"
+    python -u "$PLOT" --root "$REPO" --study "$STUDY" --expected-reps 20
 else
     # Same container fallback used by the previous recovery plotting batch files.
     IMAGE="${ESADDM_PLOT_IMAGE:-$HOME/containers/hddm_latest.sif}"
