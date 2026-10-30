@@ -26,10 +26,11 @@ import pandas as pd
 
 from .models import ROOT
 from .ppc import model_prefix, summarise_metrics
+from .ppc_plot import rstyle_curves_from_archives, _merge_rstyle_curves
 
 MODELS = ('addm', 'addm_z', 'esaddm', 'esaddm_z')
 LABELS = {
-    'addm': 'Basic aDDM', 'addm_z': 'Basic aDDM + z',
+    'addm': 'aDDM', 'addm_z': 'aDDM + z',
     'esaddm': 'ESaDDM', 'esaddm_z': 'ESaDDM + z',
 }
 COLORS = {
@@ -43,14 +44,16 @@ EDGE = '#000000'
 RT_LABELS = ['0-20%', '20-40%', '40-60%', '60-80%', '80-100%']
 DWELL_LABELS = ['E>>S', 'E>S', 'E~S', 'S>E', 'S>>E']
 
-FONT_TITLE = 24
-FONT_AXIS = 19
-FONT_TICKS = 16
-FONT_LEGEND = 15
+FONT_TITLE = 18
+FONT_AXIS = 18
+FONT_TICKS = 18
+FONT_LEGEND = 16
+FIG_WIDTH = 5.5
+FIG_HEIGHT = 4.8
 
 METRICS = (
     ('choice_probability', None,
-     'Overall choice probability by response category',
+     'Overall choice probability',
      'Choice', 'Choice probability (%)', ('E', 'S'),
      'overall_choice_probability_by_response_category'),
     ('mean_rt', None,
@@ -63,14 +66,14 @@ METRICS = (
      'median_rt_conditional_on_choice'),
     ('p_choose_s_by_rt_quintile', 'S',
      'Choice by RT quintile',
-     'RT quintile (shortest to longest)', 'Probability (%)',
+     'RT quintile (fast to slow)', 'Probability (%)',
      (1, 2, 3, 4, 5), 'p_choose_s_by_rt_quintile'),
     ('p_choose_s_by_dwell_quintile', 'S',
      'Choice by dwell-time advantage',
-     'Dwell-Time Advantage (S > E)', 'P(Choose Symbolic)',
+     'Dwell advantage (S − E)', 'P(Choose Symbolic)',
      (1, 2, 3, 4, 5), 'p_choose_s_by_dwell_advantage_quintile'),
     ('accuracy', None,
-     'Choice accuracy by response category',
+     'Choice accuracy by category',
      'Choice', 'Accuracy (%)', ('E', 'S'),
      'accuracy_by_response_category'),
 )
@@ -209,6 +212,8 @@ def load_sources(study: str, root: Path):
             raise ValueError(f'Incorrect model label in saved metrics: {model}')
 
         core, curves = summarise_metrics(observed, simulated)
+        curves = _merge_rstyle_curves(curves, rstyle_curves_from_archives(
+            study, model, directory, meta))
         trials = _read(rawdir / 'trials' / f'{prefix}_observed_trials.csv.gz')
         if reference_trials is None:
             reference_trials = trials
@@ -418,6 +423,15 @@ def save_plot(fig, stem: Path):
     plt.close(fig)
 
 
+
+
+def _small_figure_legend(ax):
+    """Place the multi-model legend below the panel, avoiding data occlusion."""
+    ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.29),
+              frameon=False, fontsize=FONT_LEGEND, ncol=2,
+              columnspacing=0.9, handlelength=1.1, handletextpad=0.45)
+
+
 def _plot_generic(core: pd.DataFrame, curves: pd.DataFrame, study: str,
                   spec: tuple, output: Path, show_bands: bool = True):
     metric, group, title, xlabel, ylabel, positions, _ = spec
@@ -425,7 +439,7 @@ def _plot_generic(core: pd.DataFrame, curves: pd.DataFrame, study: str,
     x = np.arange(len(positions), dtype=float)
     is_probability = metric.startswith('p_choose_s') or metric in ('choice_probability', 'accuracy')
     scale = 100.0 if metric in ('choice_probability', 'accuracy') else 1.0
-    fig, ax = plt.subplots(figsize=(10.8, 7.4))
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, FIG_HEIGHT))
     empirical = None
     y_limits = []
 
@@ -440,7 +454,7 @@ def _plot_generic(core: pd.DataFrame, curves: pd.DataFrame, study: str,
         elif not np.allclose(empirical, observed, atol=1e-6, rtol=0):
             raise ValueError(f'Observed values differ between models: {metric}')
         color = COLORS[model]
-        ax.plot(x, predicted, color=color, linewidth=3.0, markersize=8.0,
+        ax.plot(x, predicted, color=color, linewidth=2.0, markersize=5.5,
                 marker='o', label=LABELS[model], zorder=3)
         if show_bands:
             ax.fill_between(x, low, high, alpha=.08, color=color, linewidth=0, zorder=1)
@@ -448,28 +462,31 @@ def _plot_generic(core: pd.DataFrame, curves: pd.DataFrame, study: str,
         y_limits.append(predicted)
 
     ax.plot(x, empirical, color=OBS_COLOR, linestyle='--', marker='s',
-            linewidth=3.0, markersize=8.2, label='Observed', zorder=5)
+            linewidth=2.0, markersize=5.5, label='Observed', zorder=5)
     y_limits.append(empirical)
     ax.set_xticks(x)
     ax.set_xticklabels([str(i) for i in positions], fontsize=FONT_TICKS)
     ax.set_xlabel(xlabel, fontsize=FONT_AXIS)
     ax.set_ylabel(ylabel, fontsize=FONT_AXIS)
-    ax.set_title(f'{title} — {study.replace("study", "Study ")}', fontsize=FONT_TITLE, pad=16)
+    ax.set_title(title, fontsize=FONT_TITLE, pad=9)
     _style_axes(ax)
     _set_limits(ax, y_limits, percent=(metric in ('choice_probability', 'accuracy')))
-    ax.legend(loc='best', frameon=False, fontsize=FONT_LEGEND, ncol=2)
-    fig.tight_layout()
+    _small_figure_legend(ax)
+    fig.subplots_adjust(left=0.20, right=0.98, top=0.89, bottom=0.33)
     save_plot(fig, output)
 
 
 def _plot_rt_quintile_compare(curves: pd.DataFrame, study: str, output: Path, show_bands: bool = True):
     x = np.arange(1, 6, dtype=float)
-    fig, ax = plt.subplots(figsize=(10.8, 7.6))
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, FIG_HEIGHT))
 
     first = _select(curves.loc[curves.model.eq(MODELS[0])], 'p_choose_s_by_rt_quintile', 'S', (1, 2, 3, 4, 5))
     empirical_s = first.empirical.to_numpy(float) * 100.0
     ax.bar(x, empirical_s, width=0.64, color=EMP_S, edgecolor=EDGE, linewidth=1.2,
            alpha=.92, label='Empirical S', zorder=1)
+    if 'empirical_sem' in first:
+        ax.errorbar(x, empirical_s, yerr=first.empirical_sem.to_numpy(float) * 100,
+                    fmt='none', ecolor=EDGE, capsize=3, elinewidth=1.3, zorder=3)
     ax.axhline(50, color='#111111', linestyle=(0, (1.2, 4.0)), linewidth=2.0, zorder=0)
 
     limits = [empirical_s]
@@ -479,35 +496,41 @@ def _plot_rt_quintile_compare(curves: pd.DataFrame, study: str, output: Path, sh
         low = rows.ppc_pi95_low.to_numpy(float) * 100.0
         high = rows.ppc_pi95_high.to_numpy(float) * 100.0
         color = COLORS[model]
-        ax.plot(x, pred, color=color, marker='o', linewidth=2.8, markersize=7.8,
+        ax.plot(x, pred, color=color, marker='o', linewidth=1.9, markersize=5.3,
                 label=LABELS[model], zorder=4)
         ax.errorbar(x, pred, yerr=[pred - low, high - pred], fmt='none',
-                    ecolor=color, elinewidth=1.8, capsize=4, zorder=4)
+                    ecolor=color, elinewidth=1.3, capsize=3, zorder=4)
         if show_bands:
             ax.fill_between(x, low, high, alpha=.06, color=color, linewidth=0, zorder=2)
         limits.extend([pred, low, high])
 
     ax.set_xticks(x)
-    ax.set_xticklabels(RT_LABELS, fontsize=FONT_TICKS)
-    ax.set_xlabel('RT quintile (shortest to longest)', fontsize=FONT_AXIS)
+    ax.set_xticklabels([str(i) for i in range(1, 6)], fontsize=FONT_TICKS)
+    ax.set_xlabel('RT quintile (fast to slow)', fontsize=FONT_AXIS)
     ax.set_ylabel('Probability (%)', fontsize=FONT_AXIS)
-    ax.set_title(f'Choice by RT quintile — {study.replace("study", "Study ")}', fontsize=FONT_TITLE, pad=16)
+    ax.set_title('Choice by RT quintile', fontsize=FONT_TITLE, pad=9)
     _style_axes(ax)
     _set_limits(ax, limits, percent=True, include_half=True)
-    ax.legend(loc='best', frameon=False, fontsize=FONT_LEGEND, ncol=2)
-    fig.tight_layout()
+    _small_figure_legend(ax)
+    fig.subplots_adjust(left=0.20, right=0.98, top=0.89, bottom=0.33)
     save_plot(fig, output)
 
 
 def _plot_dwell_compare(curves: pd.DataFrame, study: str, output: Path, show_bands: bool = True):
     x = np.arange(1, 6, dtype=float)
-    fig, ax = plt.subplots(figsize=(10.0, 7.4))
+    fig, ax = plt.subplots(figsize=(FIG_WIDTH, FIG_HEIGHT))
 
     first = _select(curves.loc[curves.model.eq(MODELS[0])], 'p_choose_s_by_dwell_quintile', 'S', (1, 2, 3, 4, 5))
     empirical = first.empirical.to_numpy(float)
     ax.axhline(0.5, color='#7a7a7a', linestyle=(0, (1.2, 3.2)), linewidth=1.5, zorder=0)
-    ax.plot(x, empirical, color=EMP_S, marker='o', linewidth=3.2, markersize=8.6,
+    ax.plot(x, empirical, color=EMP_S, marker='o', linewidth=2.3, markersize=6,
             label='Empirical', zorder=3)
+    if {'empirical_ci_low', 'empirical_ci_high'}.issubset(first.columns):
+        ell = first.empirical_ci_low.to_numpy(float)
+        ehi = first.empirical_ci_high.to_numpy(float)
+        if np.isfinite(ell).all() and np.isfinite(ehi).all():
+            ax.errorbar(x, empirical, yerr=[empirical - ell, ehi - empirical],
+                        fmt='none', ecolor=EMP_S, elinewidth=1.35, capsize=3, zorder=3)
 
     limits = [empirical]
     for model in MODELS:
@@ -516,23 +539,23 @@ def _plot_dwell_compare(curves: pd.DataFrame, study: str, output: Path, show_ban
         low = rows.ppc_pi95_low.to_numpy(float)
         high = rows.ppc_pi95_high.to_numpy(float)
         color = COLORS[model]
-        ax.plot(x, pred, color=color, marker='o', linewidth=2.8, markersize=7.5,
+        ax.plot(x, pred, color=color, marker='o', linewidth=1.9, markersize=5.3,
                 label=LABELS[model], zorder=4)
         ax.errorbar(x, pred, yerr=[pred - low, high - pred], fmt='none',
-                    ecolor=color, elinewidth=1.8, capsize=4, zorder=4)
+                    ecolor=color, elinewidth=1.3, capsize=3, zorder=4)
         if show_bands:
             ax.fill_between(x, low, high, alpha=.06, color=color, linewidth=0, zorder=2)
         limits.extend([pred, low, high])
 
     ax.set_xticks(x)
     ax.set_xticklabels(DWELL_LABELS, fontsize=FONT_TICKS)
-    ax.set_xlabel('Dwell-Time Advantage (S > E)', fontsize=FONT_AXIS)
+    ax.set_xlabel('Dwell advantage (S − E)', fontsize=FONT_AXIS)
     ax.set_ylabel('P(Choose Symbolic)', fontsize=FONT_AXIS)
-    ax.set_title(f'Choice by dwell-time advantage — {study.replace("study", "Study ")}', fontsize=FONT_TITLE, pad=16)
+    ax.set_title('Choice by dwell-time advantage', fontsize=FONT_TITLE, pad=9)
     _style_axes(ax)
     _set_limits(ax, limits, is_probability=True, include_half=True)
-    ax.legend(loc='best', frameon=False, fontsize=FONT_LEGEND, ncol=2)
-    fig.tight_layout()
+    _small_figure_legend(ax)
+    fig.subplots_adjust(left=0.20, right=0.98, top=0.89, bottom=0.33)
     save_plot(fig, output)
 
 
@@ -576,6 +599,8 @@ def run_comparison(study: str, root: Path = ROOT, *, show_bands: bool = True,
         posterior_predictive_intervals='2.5–97.5% across replicated datasets',
         comparison_type='in-sample PPC diagnostics, not out-of-sample model selection',
         choice_probability_definition='P(E)=1-P(S), calculated from aligned PPC draw summaries',
+        quintile_method='posthoc R-style participant RT ntile(5); unique-value DTA quantile cut(5)',
+        empirical_quintile_intervals='RT: participant SEM; dwell: participant 95% t confidence interval',
         plotted_proportions_as_percent=True,
         created_utc=datetime.now(timezone.utc).isoformat(),
     )

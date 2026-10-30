@@ -18,6 +18,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
 import numpy as np
 import pandas as pd
 
@@ -185,12 +186,11 @@ def limits_for_plots(combined):
     return output
 
 
-def r2_label(ax, value):
-    label = f'{value:.2f}' if np.isfinite(value) else 'n/a'
-    ax.text(.045, .955, rf'$R^2 = {label}$', transform=ax.transAxes,
-            ha='left', va='top', fontsize=13,
-            bbox=dict(facecolor='white', edgecolor='#dddddd',
-                      boxstyle='round,pad=.18', alpha=.92))
+def r_legend(ax, value):
+    label = rf'$r = {value:.2f}$' if np.isfinite(value) else r'$r = \mathrm{n/a}$'
+    blank = Line2D([], [], linestyle='none')
+    return ax.legend([blank], [label], loc='upper left', frameon=False,
+                     handlelength=0, handletextpad=0, fontsize=13)
 
 
 def draw_panel(ax, df, stats, scope, param, lim, color):
@@ -220,7 +220,7 @@ def draw_panel(ax, df, stats, scope, param, lim, color):
                xlabel='recovery replicate', ylabel='parameter value')
         ax.set_xticks(rep[::max(1, len(rep)//6)].astype(int))
     ax.set_title(LABELS[param], pad=8)
-    r2_label(ax, stats.r2)
+    r_legend(ax, stats.r)
 
 
 def save(fig, folder, stem, dpi):
@@ -242,13 +242,6 @@ def figures(df, summary, limits, folder, study, dpi):
             if scope == 'group':
                 handles, labels = axes.flat[0].get_legend_handles_labels()
                 fig.legend(handles, labels, loc='lower right', bbox_to_anchor=(.98, .04), frameon=False)
-            if scope == 'individual' and category == 'derived':
-                n_hidden = int((df.scope.eq('individual') & df.parameter.isin(RATIOS) & ~df.plot_keep).sum())
-                if n_hidden:
-                    axes.flat[-1].text(.02, .9, f'extreme ratio outliers not shown: {n_hidden}\n'
-                                                   'r² includes all observations',
-                                        transform=axes.flat[-1].transAxes,
-                                        ha='left', va='top', fontsize=12, color='#666666')
             fig.suptitle(f'{study} | {scope}-level recovery | {category}')
             save(fig, folder, f'{"participant" if scope == "individual" else "group"}_recovery_{category}', dpi)
 
@@ -258,7 +251,9 @@ def figures(df, summary, limits, folder, study, dpi):
             stats = summary[summary.scope.eq(scope) & summary.parameter.eq(param)].iloc[0]
             draw_panel(ax, df, stats, scope, param, limits[scope][param], color)
             if scope == 'group':
+                r_label_legend = ax.get_legend()
                 ax.legend(loc='lower right', frameon=False)
+                ax.add_artist(r_label_legend)
             fig.suptitle(f'{study} | {scope}-level recovery', fontsize=18)
             save(fig, single, f'{scope}_{param}', dpi)
 
