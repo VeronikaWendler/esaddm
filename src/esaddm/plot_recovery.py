@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Plot ALL 14 ESaDDM + z recovery parameters, separately for each study.
 
-Reads existing recovery_parameters.csv and complete.json from rep_00 .. rep_09.
+Reads existing recovery_parameters.csv and complete.json from rep_00 .. rep_19.
 No HDDM, no synthetic data regeneration and no model fitting.
 
 Default outputs:
@@ -266,7 +266,7 @@ def main():
     parser.add_argument('--study', choices=('study1','study2','both'), default='both')
     parser.add_argument('--out', type=Path, default=None,
         help='optional output parent; if set, uses <out>/study1 and <out>/study2')
-    parser.add_argument('--expected-reps', type=int, default=10)
+    parser.add_argument('--expected-reps', type=int, default=20)
     parser.add_argument('--allow-incomplete', action='store_true', help='diagnostic use only')
     parser.add_argument('--dpi', type=int, default=190)
     args = parser.parse_args()
@@ -311,7 +311,7 @@ def main():
                 '', 'each parameter uses the same axis limits across study1 and study2 when --study both.',
                 'r and slope pool replicate x participant observations (descriptive only).',
                 'each participant is repeated across recovery replications; these are not independent subjects.',
-                'group-level interval coverage is based on 10 replicates and is imprecise.',
+                'group-level interval coverage is based on 20 replicates and is imprecise.',
                 'in-sample recovery cannot establish cross-model discrimination.',
                 'convergence failures and unstable theta ratios are retained and flagged, not hidden.']
         (dest/'README_RESULTS.txt').write_text('\n'.join(note)+'\n', encoding='utf-8')
