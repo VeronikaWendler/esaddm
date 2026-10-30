@@ -32,8 +32,8 @@ FONT_PANEL = 18
 FONT_AXIS = 18
 FONT_TICKS = 18
 FONT_LEGEND = 16
-FIG_WIDTH = 4.8
-FIG_HEIGHT = 4.2
+FIG_WIDTH = 5.8
+FIG_HEIGHT = 5.2
 
 # Stronger colours for empirical bars/lines.
 EMP_E = '#19B5E5'

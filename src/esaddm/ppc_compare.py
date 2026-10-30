@@ -48,8 +48,8 @@ FONT_TITLE = 18
 FONT_AXIS = 18
 FONT_TICKS = 18
 FONT_LEGEND = 16
-FIG_WIDTH = 5.5
-FIG_HEIGHT = 4.8
+FIG_WIDTH = 6.2
+FIG_HEIGHT = 5.5
 
 METRICS = (
     ('choice_probability', None,
@@ -119,27 +119,62 @@ def _set_limits(ax, values, is_probability=False, include_half=False, percent=Fa
     arr = arr[np.isfinite(arr)]
     if arr.size == 0:
         return
+
     if percent:
-        lo = max(0.0, np.floor((arr.min() - 3.0) / 5.0) * 5.0)
-        hi = min(100.0, np.ceil((arr.max() + 3.0) / 5.0) * 5.0)
+        vmin = float(arr.min())
+        vmax = float(arr.max())
+        span = max(vmax - vmin, 1.0)
+
+        # tighter padding than before
+        pad = max(1.0, span * 0.20)
+        lo = max(0.0, vmin - pad)
+        hi = min(100.0, vmax + pad)
+
+        # if requested, keep 50% visible
         if include_half:
-            lo = min(lo, 45.0)
-            hi = max(hi, 55.0)
+            lo = min(lo, 50.0)
+            hi = max(hi, 50.0)
+
+        # round neatly to multiples of 5
+        lo = np.floor(lo / 5.0) * 5.0
+        hi = np.ceil(hi / 5.0) * 5.0
+
+        # do not let percent plots become too wide
+        if hi - lo < 10.0:
+            center = (hi + lo) / 2.0
+            lo = max(0.0, np.floor((center - 5.0) / 5.0) * 5.0)
+            hi = min(100.0, np.ceil((center + 5.0) / 5.0) * 5.0)
+
         ax.set_ylim(lo, hi)
         ax.yaxis.set_major_formatter(FuncFormatter(_percent_formatter))
         return
+
     if is_probability:
-        lo = max(0.0, arr.min() - 0.04)
-        hi = min(1.0, arr.max() + 0.04)
+        vmin = float(arr.min())
+        vmax = float(arr.max())
+        span = max(vmax - vmin, 0.02)
+
+        pad = max(0.015, span * 0.20)
+        lo = max(0.0, vmin - pad)
+        hi = min(1.0, vmax + pad)
+
         if include_half:
-            lo = min(lo, 0.45)
-            hi = max(hi, 0.55)
+            lo = min(lo, 0.5)
+            hi = max(hi, 0.5)
+
+        # keep these plots fairly zoomed in
+        if hi - lo < 0.10:
+            center = (hi + lo) / 2.0
+            lo = max(0.0, center - 0.05)
+            hi = min(1.0, center + 0.05)
+
         ax.set_ylim(lo, hi)
         ax.yaxis.set_major_locator(MaxNLocator(nbins=5))
         return
+
     vmin, vmax = float(arr.min()), float(arr.max())
     span = max(vmax - vmin, 0.01)
-    pad = span * 0.12
+    pad = span * 0.10
     ax.set_ylim(vmin - pad, vmax + pad)
 
 
@@ -478,7 +513,7 @@ def _plot_generic(core: pd.DataFrame, curves: pd.DataFrame, study: str,
 
 def _plot_rt_quintile_compare(curves: pd.DataFrame, study: str, output: Path, show_bands: bool = True):
     x = np.arange(1, 6, dtype=float)
-    fig, ax = plt.subplots(figsize=(FIG_WIDTH, FIG_HEIGHT))
+    fig, ax = plt.subplots(figsize=(6.3, 5.3))
 
     first = _select(curves.loc[curves.model.eq(MODELS[0])], 'p_choose_s_by_rt_quintile', 'S', (1, 2, 3, 4, 5))
     empirical_s = first.empirical.to_numpy(float) * 100.0
