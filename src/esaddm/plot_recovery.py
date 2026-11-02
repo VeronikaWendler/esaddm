@@ -45,10 +45,10 @@ REQUIRED = {
 }
 
 plt.rcParams.update({
-    'font.family': 'DejaVu Sans', 'font.size': 13,
-    'axes.titlesize': 17, 'axes.labelsize': 14,
+    'font.family': 'DejaVu Sans', 'font.size': 16,
+    'axes.titlesize': 17, 'axes.labelsize': 16,
     'xtick.labelsize': 12, 'ytick.labelsize': 12,
-    'figure.titlesize': 19, 'legend.fontsize': 12,
+    'figure.titlesize': 19, 'legend.fontsize': 16,
     'pdf.fonttype': 42, 'ps.fonttype': 42,
 })
 
