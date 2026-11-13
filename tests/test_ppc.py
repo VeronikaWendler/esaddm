@@ -1,4 +1,4 @@
-"""PPC transformation/alignment checks; real HDDM sampling is BlueBEAR-only."""
+"""PPC transformation/alignment checks; real HDDM sampling is only on BlueBEAR"""
 from __future__ import annotations
 
 import numpy as np

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=esaddm_ppc_compare
 #SBATCH --mail-type=ALL
-# All computation is offline: no HDDM fit and no PPC simulation.
 
 set -euo pipefail
 module purge

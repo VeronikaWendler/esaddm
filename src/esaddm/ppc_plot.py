@@ -1,7 +1,5 @@
-"""Offline PPC tables and talk-ready plots from saved generated PPC summaries.
+"""PPC tables and plots from saved generated PPC summaries.
 
-Never loads HDDM, never simulates PPC, never changes generation outputs.
-Rerun at any time to change colours, typography, group summaries and figures.
 """
 from __future__ import annotations
 
@@ -26,7 +24,6 @@ from .ppc import (
     QUINTILES, IDENTITY_MODELS, model_prefix, summarise_metrics, subject_boxplot_data,
 )
 
-# Slightly larger typography throughout.
 FONT_TITLE = 18
 FONT_PANEL = 18
 FONT_AXIS = 18
@@ -35,7 +32,6 @@ FONT_LEGEND = 16
 FIG_WIDTH = 5.8
 FIG_HEIGHT = 5.2
 
-# Stronger colours for empirical bars/lines.
 EMP_E = '#19B5E5'
 EMP_S = '#A13AD8'
 PRED_E = PPC_E

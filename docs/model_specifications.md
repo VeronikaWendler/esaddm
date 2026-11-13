@@ -1,9 +1,7 @@
 # Model specifications and response coordinates
 
-All value inputs are objective **probabilities on a 0–1 scale**. Values and physical
-gaze fractions are rounded to three decimals, and individual contribution terms
-are rounded **before** assembling source-weighted regressors, as specified by the model-input preparation functions. Preserve these
-rounding steps; changing them changes the drift regressors.
+All value inputs are objective **probabilities on a 0–1 scale**. Values and
+gaze fractions are rounded to three decimals
 
 ## Accuracy-coded ES / EE
 
@@ -17,12 +15,12 @@ RT must be **strictly greater than 0.250 seconds**.
 - `inattention_w = round(g_low * v_high - g_high * v_low, 3)`
 
 Intended no-intercept drift: `v ~ 0 + attention_w + inattention_w`.
-This project fits accuracy-coded ES and EE **without a drift intercept**.
+This project fits accuracy-coded ES and EE without a drift intercept.
 
-## Identity-coded ES (primary four-model family)
+## Identity-coded ES (main model family)
 
 `response = 1` if S was chosen; `response = 0` if E was chosen regardless of side.
-Equal-value trials are **retained**. RT must be **at least 0.250 seconds**.
+Equal-value trials are retained. RT must be at least 0.250 seconds.
 
 For `g_s`, `g_e`, values `v_s`, `v_e`:
 
@@ -46,8 +44,8 @@ For `g_s`, `g_e`, values `v_s`, `v_e`:
 
 A coefficient on the signed contrast has interpretation `delta_a = b_as-b_ae`
 (and `delta_i = b_is-b_ie`), because the contrast is half the difference.
-Fitting uses `HDDMRegressor`, `p_outlier=0.05`, participant-varying
-drift coefficients, and a saved posterior for each independent chain.
+Fitting uses `HDDMRegressor`, `p_outlier=0.05`, and
+drift coefficients that vary on every trial for every subject
 
 ## Inclusions and expected samples
 
@@ -55,9 +53,7 @@ drift coefficients, and a saved posterior for each independent chain.
 | --- | --- | --- |
 | Excluded participant IDs | 1,4,5,6,14,99 | 2,6,9,14,18,20,26 |
 | Participants | 21 | 20 |
-| Identity ES rows | 7,234 | 6,549 |
-| Accuracy ES rows | 6,435 | 5,811 |
-| Accuracy EE rows | 2,756 | 2,363 |
+| Identity ES rows | 7234 | 6549 |
+| Accuracy ES rows | 6435 | 5811 |
+| Accuracy EE rows | 2756 | 2363 |
 
-Document the scientific reasons for participant exclusions in the manuscript.
-The configuration files are the authoritative source for these IDs.

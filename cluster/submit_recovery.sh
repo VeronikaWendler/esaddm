@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# submit one or more parameter-recovery datasets for a study
+# submit parameter-recovery datasets for a study
 # examples: bash cluster/submit_recovery.sh study1 0
 #           bash cluster/submit_recovery.sh both all
 set -euo pipefail

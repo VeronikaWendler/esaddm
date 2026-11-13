@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# examples: bash cluster/submit.sh study1 0
+#           bash cluster/submit.sh both all
+
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 action="${1:-}"

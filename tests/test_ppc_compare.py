@@ -1,4 +1,4 @@
-"""Offline four-model comparisons from stored trials/metrics; never run HDDM."""
+""" four-model comparisons from stored trials/metrics; never run HDDM."""
 import gzip
 import hashlib
 import json

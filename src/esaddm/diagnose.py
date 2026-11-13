@@ -1,8 +1,7 @@
 """ diagnostics for fitted ES/EE HDDM models (both studies).
 
 model specifications are read from config/models.json; 
-outputs are analysed by default. 
-Short smoke fits check if everythign works.
+Short smoke tests check if everythign works.
 """
 from __future__ import annotations
 

@@ -1,0 +1,337 @@
+---
+title: "inter_individ"
+output: html_document
+---
+
+
+```{r}
+# pooled theta and ee value-sensitivity analysis
+
+library(dplyr)
+library(ggplot2)
+library(sandwich)
+library(lmtest)
+library(marginaleffects)
+
+study1_nodes_file  <- "D:/Birmingham_Uni_Oct25/esaddm/studies/study1/results/esaddm_z/fits/esaddm_z_study1_posterior_summary_all_nodes.csv"
+study2_nodes_file  <- "D:/Birmingham_Uni_Oct25/esaddm/studies/study2/results/esaddm_z/fits/esaddm_z_study2_posterior_summary_all_nodes.csv"
+study1_slopes_file <- "D:/Birmingham_Uni_Oct25/Eye_Tracking_Project/Study1/results/tables/behav/Study1_Garcia_ParticipantSlopes.csv"
+study2_slopes_file <- "D:/Birmingham_Uni_Oct25/Eye_Tracking_Project/Study2/results/tables/behav/Study2_Garcia_ParticipantSlopes.csv"
+output_dir         <- "D:/Birmingham_Uni_Oct25/esaddm/inter_individual"
+
+
+# get model coefficients
+
+read_coefficient <- function(nodes, parameter) {
+
+  pattern <- paste0("^", parameter, "_subj\\.[0-9]+$")
+  values <- nodes[grepl(pattern, nodes$node), c("node", "mean")]
+  values$sub_id <- as.integer(sub(".*_subj\\.", "", values$node))
+  values$mean <- as.numeric(values$mean)
+  names(values)[2] <- parameter
+  values[, c("sub_id", parameter)]
+}
+
+
+read_model <- function(file) {
+  
+  nodes <- read.csv(file, check.names = FALSE)
+  names(nodes)[1] <- "node"
+  attended <- read_coefficient(nodes, "v_attention_w")
+  unattended <- read_coefficient(nodes, "v_inattention_w")
+  attended_contrast <- read_coefficient(nodes, "v_attention_contrast")
+  unattended_contrast <- read_coefficient(nodes, "v_inattention_contrast")
+
+  parameters <- attended %>%
+    inner_join(unattended, by = "sub_id") %>%
+    inner_join(attended_contrast, by = "sub_id") %>%
+    inner_join(unattended_contrast, by = "sub_id")
+
+  # check that no participant was lost when joining coefficients
+  expected_n <- nrow(attended)
+
+  if (nrow(parameters) != expected_n ||
+      nrow(unattended) != expected_n ||
+      nrow(attended_contrast) != expected_n ||
+      nrow(unattended_contrast) != expected_n) {
+    stop("participant ids differ across model coefficients")
+  }
+
+  parameters <- parameters %>%
+    mutate(
+      b_as = v_attention_w + v_attention_contrast / 2,
+      b_ae = v_attention_w - v_attention_contrast / 2,
+      b_is = v_inattention_w + v_inattention_contrast / 2,
+      b_ie = v_inattention_w - v_inattention_contrast / 2,
+
+      theta_s = b_is / b_as,
+      theta_e = b_ie / b_ae
+    ) %>%
+    select(sub_id, theta_s, theta_e)
+
+  parameters
+}
+
+
+# read EE slopes
+
+read_ee_slopes <- function(file) {
+
+  slopes <- read.csv(file)
+  stopifnot(all(c("sub_id", "phase", "slope") %in% names(slopes)))
+
+  slopes <- slopes %>%
+    filter(toupper(trimws(phase)) == "EE") %>%
+    transmute(
+      sub_id = as.integer(sub_id),
+      ee_slope = as.numeric(slope)
+    )
+
+  slopes
+}
+
+
+# match participants separately for each study
+
+match_study <- function(nodes_file, slopes_file, study_name) {
+
+  model_data <- read_model(nodes_file)
+  slope_data <- read_ee_slopes(slopes_file)
+  matched <- inner_join(model_data, slope_data, by = "sub_id")
+  message(study_name, ": ", nrow(matched), " participants matched")
+  matched %>%
+    mutate(study = study_name, .before = 1)
+}
+
+
+study1 <- match_study(study1_nodes_file, study1_slopes_file, "study1")
+
+study2 <- match_study(study2_nodes_file, study2_slopes_file, "study2")
+
+data <- bind_rows(study1, study2) %>%
+  mutate(study = factor(study, levels = c("study1", "study2"))) %>%
+  arrange(study, sub_id)
+
+# check sample size
+stopifnot(
+  nrow(study1) == 21,
+  nrow(study2) == 20,
+  nrow(data) == 41,
+  !anyDuplicated(data[c("study", "sub_id")])
+)
+
+write.csv(data, file.path(output_dir, "matched_participants.csv"), row.names = FALSE)
+
+
+# standardise within each study 
+
+data <- data %>%
+  group_by(study) %>%
+  mutate(
+    ee_slope_z = as.numeric(scale(ee_slope)),
+    theta_s_z = as.numeric(scale(theta_s)),
+    theta_e_z = as.numeric(scale(theta_e))
+  ) %>%
+  ungroup()
+
+
+# pooled regression 
+model <- lm(ee_slope_z ~ theta_s_z + theta_e_z + study, data = data)
+
+# hc3 robust standard errors - small sample
+robust_cov <- sandwich::vcovHC(model, type = "HC3")
+robust_test <- lmtest::coeftest(model, vcov. = robust_cov)
+
+print(robust_test)
+parameters <- c("theta_s_z", "theta_e_z")
+
+results <- data.frame(
+  parameter = c("theta_s", "theta_e"),
+  beta = robust_test[parameters, "Estimate"],
+  se = robust_test[parameters, "Std. Error"],
+  p = robust_test[parameters, "Pr(>|t|)"],
+  row.names = NULL
+)
+
+critical_t <- qt(0.975, df.residual(model))
+
+results$ci_low <- results$beta - critical_t * results$se
+results$ci_high <- results$beta + critical_t * results$se
+
+
+# direct difference between theta_s and theta_e
+
+difference <- coef(model)["theta_s_z"] - coef(model)["theta_e_z"]
+
+difference_se <- sqrt(
+  robust_cov["theta_s_z", "theta_s_z"] +
+  robust_cov["theta_e_z", "theta_e_z"] -
+  2 * robust_cov["theta_s_z", "theta_e_z"]
+)
+
+difference_p <- 2 * pt(
+  -abs(difference / difference_se),
+  df.residual(model)
+)
+
+results <- bind_rows(
+  results,
+  data.frame(
+    parameter = "theta_s_minus_theta_e",
+    beta = unname(difference),
+    se = unname(difference_se),
+    p = unname(difference_p),
+    ci_low = unname(difference - critical_t * difference_se),
+    ci_high = unname(difference + critical_t * difference_se)
+  )
+)
+
+# overall regression r-squared
+model_r2 <- summary(model)$r.squared
+
+results$n <- nrow(data)
+results$model_r2 <- model_r2
+
+write.csv(
+  results,
+  file.path(output_dir, "theta_ee_results.csv"),
+  row.names = FALSE
+)
+
+print(results, row.names = FALSE, digits = 3)
+cat("overall model R-squared:", round(model_r2, 3), "\n")
+
+
+# each plot shows the association after accounting for study and the other theta coefficient
+
+study_effect <- ifelse(
+  data$study == "study2",
+  coef(model)["studystudy2"],
+  0
+)
+
+# symbolic theta remove experiential theta contribution
+data$ee_adjusted_s <- data$ee_slope_z -
+  coef(model)["theta_e_z"] * data$theta_e_z -
+  study_effect
+
+# experiential theta remove symbolic theta contribution
+data$ee_adjusted_e <- data$ee_slope_z -
+  coef(model)["theta_s_z"] * data$theta_s_z -
+  study_effect
+
+
+# function for figures 
+make_plot <- function(x_column, y_column, model_term,
+                      title, x_label, filename) {
+
+  # observed data, adjusted for study and the other theta
+  plot_data <- data.frame(
+    x = data[[x_column]],
+    y = data[[y_column]]
+  )
+
+  # hold other predictors at zero
+  prediction_data <- data.frame(
+    theta_s_z = rep(0, 100),
+    theta_e_z = rep(0, 100),
+    study = factor(rep("study1", 100), levels = levels(data$study))
+  )
+
+  prediction_data[[model_term]] <- seq(
+    min(data[[x_column]]),
+    max(data[[x_column]]),
+    length.out = 100
+  )
+
+  # fitted values and 95% confidence intervals
+  predictions <- marginaleffects::predictions(
+    model,
+    newdata = prediction_data,
+    vcov = robust_cov,
+    df = df.residual(model)
+  )
+
+  line_data <- data.frame(
+    x = prediction_data[[model_term]],
+    y = predictions$estimate,
+    lower = predictions$conf.low,
+    upper = predictions$conf.high
+  )
+
+  # regression statistics
+  parameter <- ifelse(model_term == "theta_s_z", "theta_s", "theta_e")
+  result <- results[results$parameter == parameter, ]
+
+  p_label <- ifelse(result$p < 0.001, "< .001", sprintf("%.3f", result$p))
+
+  stats_label <- sprintf("b = %.2f\np = %s", result$beta, p_label)
+
+  # figure
+  figure <- ggplot(plot_data, aes(x, y)) +
+    geom_ribbon(
+      data = line_data,
+      aes(x = x, ymin = lower, ymax = upper),
+      inherit.aes = FALSE,
+      fill = "#267CB8", alpha = 0.18
+    ) +
+    geom_line(
+      data = line_data,
+      aes(x = x, y = y),
+      inherit.aes = FALSE,
+      colour = "#267CB8", linewidth = 1.1
+    ) +
+    geom_point(
+      colour = "#267CB8", size = 2.9, alpha = 0.9
+    ) +
+    annotate(
+      "text", x = -Inf, y = Inf,
+      label = stats_label,
+      hjust = -0.08, vjust = 1.1, size = 6
+    ) +
+    labs(
+      title = title,
+      x = x_label,
+      y = "EE Value-sensitivity Slope"
+    ) +
+    theme_classic(base_size = 18) +
+    theme(
+      plot.title = element_text(hjust = 0.5, size = 18),
+      axis.title = element_text(size = 18),
+      axis.text = element_text(size = 18)
+    )
+
+  print(figure)
+
+  ggsave(file.path(output_dir, paste0(filename, ".png")),
+         figure, width = 6, height = 4.3, dpi = 450, bg = "white")
+
+  ggsave(file.path(output_dir, paste0(filename, ".pdf")),
+         figure, width = 6, height = 4.3,
+         device = "pdf", useDingbats = FALSE)
+}
+
+
+
+make_plot(
+  x_column = "theta_s_z",
+  y_column = "ee_adjusted_s",
+  model_term = "theta_s_z",
+  title = "symbolic",
+  x_label = expression(theta[S]),
+  filename = "theta_s_ee_slope"
+)
+
+make_plot(
+  x_column = "theta_e_z",
+  y_column = "ee_adjusted_e",
+  model_term = "theta_e_z",
+  title = "experiential",
+  x_label = expression(theta[E]),
+  filename = "theta_e_ee_slope"
+)
+
+cat("\nanalysis completed. files saved to:\n", output_dir, "\n")
+
+```
+

@@ -1,5 +1,7 @@
 #!/bin/bash
-# Submit plotting only. Safe to rerun after data are available.
+# examples: bash cluster/submit_recovery_plots.sh study1 0
+#           bash cluster/submit_recovery_plots.sh both all
+
 set -euo pipefail
 ROOT="/rds/projects/z/zhanglp-vwendler-core/esaddm"
 [[ -d "$ROOT/logs/slurm" ]] || mkdir -p "$ROOT/logs/slurm"

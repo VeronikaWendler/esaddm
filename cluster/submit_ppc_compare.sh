@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Usage: bash cluster/submit_ppc_compare.sh study1|study2|both
+# Example useage: bash cluster/submit_ppc_compare.sh study1|study2|both
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 case "${1:-}" in

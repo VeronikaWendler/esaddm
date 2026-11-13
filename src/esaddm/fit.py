@@ -3,7 +3,7 @@
 
 Smoke tests use prepared data and HDDM, save and reload one short
 chain per model, and execute model families sequentially in one job.
-Full fits use five independently seeded chains per model by default.
+Full fits use five independently seeded chains per model
 
 """
 from __future__ import annotations

@@ -10,8 +10,8 @@
 #   bash cluster/submit_ppc.sh study1 all
 #
 #
-# Generates ONLY saved PPC data. Plot later via submit_ppc_plot.sh.
-#   PPC_DRAWS=500 bash cluster/submit_ppc.sh study2 all
+# Generates PPC data
+#   PPC_DRAWS=1000 bash cluster/submit_ppc.sh study2 all
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 study="${1:-}"

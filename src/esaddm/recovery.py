@@ -5,13 +5,13 @@ one replicate is one simulated version of the original ES phase.
 steps
 -----
 1. select generating parameters from a joint empirical posterior draw.
-2. calculate each trial's drift using its recorded gaze and value predictors.
+2. calculate drift on every trial using the given addm formula.
 3. simulate choices and response times for every trial.
 4. refit the same ESaDDM+z model to the simulated data.
 5. derive E/S coefficients and attentional ratios from recovered draws.
 6. save group and participant recovery estimates and convergence statistics.
 
-ten replicates are run for each study (simila rto Fontanesi et al., 2019).
+20 replicates are run for each study (similarto Fontanesi et al., 2019 - yet, they used 10).
 """
 from __future__ import annotations
 
@@ -50,10 +50,10 @@ GROUP_NODES = dict(a='a', t='t', z='z', b_a='v_attention_w',
                    delta_i='v_inattention_contrast')
 
 # hddm simulator parameters are ordered as v, a, z, t, sz, sv, st;
-# the final three are fixed to zero by the model.
+# the final three are fixed to zero by the model
 SIM_MODEL = 'full_ddm_hddm_base'
 
-# numerical safeguards and data-format version
+# safeguards and data-format version
 NEAR_ZERO_DENOMINATOR = 1e-10
 MIN_SOURCE_DRAWS = 50
 VERSION = 2

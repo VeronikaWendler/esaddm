@@ -8,7 +8,6 @@
 #SBATCH --chdir=/rds/projects/z/zhanglp-vwendler-core/esaddm
 set -euo pipefail
 
-# Plot only: no model fitting, posterior sampling, or changes to rep_XX inputs.
 REPO="/rds/projects/z/zhanglp-vwendler-core/esaddm"
 STUDY="study2"
 PLOT="$REPO/scripts/plot_recovery.py"
@@ -23,7 +22,6 @@ echo "plot job=${SLURM_JOB_ID:-local} study=$STUDY host=$(hostname) root=$REPO"
 if python -c 'import numpy, pandas, matplotlib' >/dev/null 2>&1; then
     python -u "$PLOT" --root "$REPO" --study "$STUDY" --expected-reps 20
 else
-    # Same container fallback used by the previous recovery plotting batch files.
     IMAGE="${ESADDM_PLOT_IMAGE:-$HOME/containers/hddm_latest.sif}"
     command -v apptainer >/dev/null 2>&1 || { echo 'python plotting packages missing; apptainer unavailable' >&2; exit 1; }
     [[ -f "$IMAGE" ]] || { echo "missing plotting image: $IMAGE" >&2; exit 1; }

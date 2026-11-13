@@ -1,4 +1,4 @@
-"""Test plotting from saved summary draws (NO HDDM mocking / simulation)."""
+"""Test plotting from saved summary draws."""
 import hashlib
 import inspect
 import json

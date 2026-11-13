@@ -1,11 +1,11 @@
-"""Generate and save trial-aligned posterior predictive summary draws for all six models.
+"""Generate and save trial posterior predictive summary draws for all six models.
 
 Each run reads already-fitted HDDM chains; it never fits or modifies models.
-500 replicated full datasets by default (100 from each of five chains),
+1000 replicated full datasets by default (100 from each of five chains),
 generated in small batches to limit peak memory use.
 
 - ES models: participant-level RT/accuracy by chosen E or S; P(E/S) by
-  predicted RT quintile; P(S) by *observed* S-minus-E dwell-time quintile.
+  predicted RT quintile; P(S) by S-minus-E dwell-time quintile.
 - EE accuracy model: overall accuracy and RT for correct/error choices.
 - Tie trials are RETAINED in ES identity PPC; ties are excluded ONLY from
   accuracy calculations because correctness is undefined on a value tie.
@@ -28,7 +28,6 @@ import pandas as pd
 
 from .models import ROOT, check_input, load_models
 
-# Identical E/S palette to the original identity PPC; prediction is darker.
 OBS_E = 'deepskyblue'
 OBS_S = 'darkorchid'
 PPC_E = 'steelblue'

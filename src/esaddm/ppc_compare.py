@@ -1,12 +1,10 @@
 """Four-model ES posterior predictive comparisons from saved PPC data only.
 
-Compares aDDM, aDDM+z, ESaDDM, ESaDDM+z within ONE study.
-Does not import HDDM, simulate decisions, or alter existing PPC outputs.
+Compares aDDM, aDDM+z, ESaDDM, ESaDDM+z within a study.
 
 All four models must use exactly matching observed identity-coded ES trials.
 Median RT is calculated once from stored compressed trial-level PPC outputs
 and cached with a source-file fingerprint for fast subsequent replotting.
-All group summaries weight participants equally, as in esaddm.ppc.py.
 """
 from __future__ import annotations
 

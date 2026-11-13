@@ -2,7 +2,7 @@
 # After PPC generation succeeds, create/recreate tables and plots, e.g.:
 #   bash cluster/submit_ppc_plot.sh study1 esaddm_z
 #   bash cluster/submit_ppc_plot.sh study1 all
-# No HDDM simulation is performed by the plotting stage.
+
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 study="${1:-}"
